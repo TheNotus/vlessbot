@@ -1,0 +1,7 @@
+python-telegram-bot==21.7
+yookassa==3.4.0
+requests==2.32.3
+aiosqlite==0.20.0
+python-dotenv==1.0.1
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
