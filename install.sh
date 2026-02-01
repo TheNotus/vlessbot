@@ -227,7 +227,11 @@ echo "  Python: $($PYTHON_CMD --version)"
 # 4. Пользователь и директории
 echo "[4/10] Создание пользователя и директорий..."
 if ! id "$BOT_USER" &>/dev/null; then
-    useradd -r -m -s /bin/bash "$BOT_USER"
+    if getent group "$BOT_USER" &>/dev/null; then
+        useradd -r -m -s /bin/bash -g "$BOT_USER" "$BOT_USER"
+    else
+        useradd -r -m -s /bin/bash "$BOT_USER"
+    fi
 fi
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOG_DIR"
