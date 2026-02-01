@@ -282,7 +282,7 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
       <textarea name="value" rows="3" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
     </div>''')
         elif key == "VPN_NAME":
-            ph = "Название VPN (RealityVPN, ApolloVPN...)"
+            ph = "Название VPN (ApollonVPN)"
             rows.append(f'''
     <div class="setting-row">
       <span class="setting-key"><code>{html.escape(key)}</code></span>

@@ -124,7 +124,7 @@ class VPNBot:
     def _build_main_menu(
         self, user_first_name: str, full_welcome: bool = True
     ) -> tuple[str, list[list[InlineKeyboardButton]]]:
-        """Собрать текст и клавиатуру главного меню (стиль RealityVPN)"""
+        """Собрать текст и клавиатуру главного меню"""
         vpn = self.config.vpn_name
         welcome = self.config.welcome_message.replace("{name}", user_first_name)
         text = f"👋 *Добро пожаловать в {vpn}!*\n\n👉 {welcome}\n\n"

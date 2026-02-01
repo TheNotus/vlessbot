@@ -140,7 +140,7 @@ class Config:
             trial_days=int(os.getenv("TRIAL_DAYS", "0")),
             trial_data_limit_gb=int(os.getenv("TRIAL_DATA_LIMIT_GB", "0")),
             referral_days=int(os.getenv("REFERRAL_DAYS", "0")),
-            vpn_name=os.getenv("VPN_NAME", "RealityVPN"),
+            vpn_name=os.getenv("VPN_NAME", "VPN"),
             support_link=(os.getenv("SUPPORT_LINK") or "").strip(),
             support_button_text=os.getenv("SUPPORT_BUTTON_TEXT", "НАПИСАТЬ"),
             welcome_message=(os.getenv("WELCOME_MESSAGE") or "Нажмите «🛒 Тарифы» ниже, чтобы выбрать подписку.").replace("\\n", "\n"),
