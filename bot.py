@@ -14,6 +14,7 @@ from telegram.ext import (
 from config import Config, PlanConfig
 from database import Database
 from remnawave_client import RemnawaveClient, RemnawaveError
+from utils import extract_short_uuid, get_subscription_url
 from yookassa_client import create_payment, init_yookassa
 
 # Настройка логирования
@@ -56,30 +57,67 @@ class VPNBot:
         """Получить referrer_id из user_data"""
         return (context.user_data or {}).get("referrer_id")
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработка команды /start"""
-        user = update.effective_user
-        if not user:
-            return
+    async def _check_blocked(self, update: Update, user_id: int) -> bool:
+        """Проверить блокировку. Возвращает True если заблокирован."""
+        if await self.db.is_blocked(user_id):
+            text = "⛔ Вы заблокированы. Обратитесь в поддержку."
+            if update.message:
+                await update.message.reply_text(text)
+            elif update.callback_query:
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_text(text)
+            return True
+        return False
 
-        # Обработка реферальной ссылки: /start ref_12345
-        referrer_id = self._parse_referrer_from_start(context)
-        if referrer_id and referrer_id != user.id:
-            self._save_referrer(context, referrer_id)
+    async def _check_subscription(self, update: Update, user_id: int, bot) -> bool:
+        """Проверить подписку на канал. Возвращает True если нужно подписаться."""
+        channel_id = self.config.forced_channel_id
+        if not channel_id:
+            return False
+        try:
+            member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+            if member.status in ("left", "kicked"):
+                username = self.config.forced_channel_username or ""
+                link = f"https://t.me/{username.lstrip('@')}" if username else f"https://t.me/c/{str(channel_id).replace('-100', '')}"
+                text = (
+                    "📢 *Подпишитесь на канал*\n\n"
+                    "Для использования бота необходимо подписаться на наш канал.\n\n"
+                    f"[👉 Подписаться]({link})\n\n"
+                    "После подписки нажмите /start"
+                )
+                keyboard = [[InlineKeyboardButton("📢 Подписаться", url=link)], [InlineKeyboardButton("🔄 Проверить подписку", callback_data="check_sub")]]
+                if update.message:
+                    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                elif update.callback_query:
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                return True
+        except Exception as e:
+            logger.warning(f"Ошибка проверки подписки: {e}")
+        return False
 
-        welcome_text = f"""
+    def _build_main_menu(
+        self, user_first_name: str, full_welcome: bool = True
+    ) -> tuple[str, list[list[InlineKeyboardButton]]]:
+        """Собрать текст и клавиатуру главного меню"""
+        if full_welcome:
+            text = f"""
 🔐 *Добро пожаловать в VPN сервис!*
 
-Привет, {user.first_name}! Здесь вы можете приобрести VPN подписку для безопасного и свободного доступа в интернет.
+Привет, {user_first_name}! Здесь вы можете приобрести VPN подписку для безопасного и свободного доступа в интернет.
 
 *Доступные тарифы:*
 """
-        for plan in self.config.plans:
-            welcome_text += f"\n• *{plan.name}* — {plan.price:.0f} ₽"
+            for plan in self.config.plans:
+                text += f"\n• *{plan.name}* — {plan.price:.0f} ₽"
+            text += "\n\nВыберите тариф или действие 👇"
+        else:
+            text = f"""
+🔐 *VPN сервис*
 
-        welcome_text += "\n\nВыберите тариф или действие 👇"
-
-        keyboard = []
+Привет, {user_first_name}! Выберите тариф или действие.
+"""
+        keyboard: list[list[InlineKeyboardButton]] = []
         for plan in self.config.plans:
             keyboard.append([
                 InlineKeyboardButton(
@@ -101,7 +139,24 @@ class VPNBot:
             keyboard.append([
                 InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"),
             ])
+        return text, keyboard
 
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработка команды /start"""
+        user = update.effective_user
+        if not user:
+            return
+        if await self._check_blocked(update, user.id):
+            return
+        if await self._check_subscription(update, user.id, context.bot):
+            return
+
+        # Обработка реферальной ссылки: /start ref_12345
+        referrer_id = self._parse_referrer_from_start(context)
+        if referrer_id and referrer_id != user.id:
+            self._save_referrer(context, referrer_id)
+
+        welcome_text, keyboard = self._build_main_menu(user.first_name or "User", full_welcome=True)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
@@ -116,6 +171,9 @@ class VPNBot:
         """Обработка нажатия на кнопку покупки"""
         query = update.callback_query
         await query.answer()
+        user = query.from_user
+        if user and (await self._check_blocked(update, user.id) or await self._check_subscription(update, user.id, context.bot)):
+            return
 
         if not query.data or not query.data.startswith("buy:"):
             return
@@ -125,8 +183,6 @@ class VPNBot:
         if not plan:
             await query.edit_message_text("❌ Тариф не найден.")
             return
-
-        user = query.from_user
         if not user:
             return
 
@@ -198,13 +254,13 @@ class VPNBot:
         """Показать информацию о подписке пользователя"""
         query = update.callback_query
         await query.answer()
-
         user = query.from_user
         if not user:
             return
+        if await self._check_blocked(update, user.id) or await self._check_subscription(update, user.id, context.bot):
+            return
 
         try:
-            # Проверяем в Remnawave по Telegram ID
             users = self.remnawave.get_user_by_telegram_id(user.id)
 
             if not users or (isinstance(users, list) and len(users) == 0):
@@ -223,7 +279,9 @@ class VPNBot:
 
                 # Берём последний активный заказ
                 order = active_orders[0]
-                subscription_url = self._get_subscription_url(order.short_uuid)
+                subscription_url = get_subscription_url(
+                    order.short_uuid, self.config.remnawave.subscription_base_url
+                )
 
                 text = f"""
 📋 *Ваша подписка*
@@ -239,9 +297,11 @@ class VPNBot:
             else:
                 # Пользователь найден в Remnawave
                 rw_user = users[0] if isinstance(users, list) else users
-                short_uuid = rw_user.get("shortUuid") or rw_user.get("short_uuid")
+                short_uuid = extract_short_uuid(rw_user)
                 if short_uuid:
-                    subscription_url = self._get_subscription_url(short_uuid)
+                    subscription_url = get_subscription_url(
+                        short_uuid, self.config.remnawave.subscription_base_url
+                    )
                     text = f"""
 📋 *Ваша подписка*
 
@@ -267,7 +327,9 @@ class VPNBot:
             active = [o for o in orders if o.status == "succeeded" and o.short_uuid]
             if active:
                 order = active[0]
-                sub_url = self._get_subscription_url(order.short_uuid)
+                sub_url = get_subscription_url(
+                    order.short_uuid, self.config.remnawave.subscription_base_url
+                )
                 await query.edit_message_text(
                     f"📋 *Ваша подписка*\n\n`{sub_url}`",
                     parse_mode="Markdown",
@@ -283,22 +345,16 @@ class VPNBot:
                     ]),
                 )
 
-    def _get_subscription_url(self, short_uuid: str) -> str:
-        """Получить полный URL подписки"""
-        base = self.config.remnawave.subscription_base_url
-        if base:
-            return f"{base.rstrip('/')}/sub/{short_uuid}"
-        return f"https://[REMNAWAVE_DOMAIN]/sub/{short_uuid}"
-
     async def trial_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Обработка запроса пробного периода"""
         query = update.callback_query
         await query.answer()
-
         user = query.from_user
         if not user:
+            return
+        if await self._check_blocked(update, user.id) or await self._check_subscription(update, user.id, context.bot):
             return
 
         if self.config.trial_days <= 0:
@@ -336,13 +392,12 @@ class VPNBot:
             )
             await self.db.add_trial_user(user.id)
 
-            short_uuid = user_data.get("shortUuid") or user_data.get("short_uuid")
-            user_obj = user_data.get("user", user_data)
-            if not short_uuid:
-                short_uuid = user_obj.get("shortUuid") or user_obj.get("short_uuid")
+            short_uuid = extract_short_uuid(user_data)
 
             if short_uuid:
-                sub_url = self._get_subscription_url(short_uuid)
+                sub_url = get_subscription_url(
+                    short_uuid, self.config.remnawave.subscription_base_url
+                )
                 traffic_str = f"{self.config.trial_data_limit_gb} ГБ" if self.config.trial_data_limit_gb else "безлимит"
                 text = f"""
 ✅ *Пробный период активирован!*
@@ -380,9 +435,10 @@ class VPNBot:
         """Показать реферальную ссылку"""
         query = update.callback_query
         await query.answer()
-
         user = query.from_user
         if not user:
+            return
+        if await self._check_blocked(update, user.id) or await self._check_subscription(update, user.id, context.bot):
             return
 
         if self.config.referral_days <= 0:
@@ -416,41 +472,38 @@ class VPNBot:
             ]),
         )
 
+    async def check_sub_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Проверка подписки — если подписался, показать меню"""
+        query = update.callback_query
+        await query.answer()
+        user = query.from_user
+        if not user:
+            return
+        if await self._check_subscription(update, user.id, context.bot):
+            return
+        welcome_text, keyboard = self._build_main_menu(user.first_name or "User", full_welcome=True)
+        await query.edit_message_text(
+            welcome_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
     async def back_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Возврат в главное меню"""
         query = update.callback_query
         await query.answer()
-
         user = query.from_user
-        welcome_text = f"""
-🔐 *VPN сервис*
-
-Привет, {user.first_name}! Выберите тариф или действие.
-"""
-        keyboard = []
-        for plan in self.config.plans:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{plan.name} — {plan.price:.0f} ₽",
-                    callback_data=f"buy:{plan.id}",
-                )
-            ])
-        if self.config.trial_days > 0:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"🎁 Попробовать бесплатно ({self.config.trial_days} дн.)",
-                    callback_data="trial",
-                )
-            ])
-        keyboard.append([
-            InlineKeyboardButton("📋 Моя подписка", callback_data="my_subscription"),
-        ])
-        if self.config.referral_days > 0:
-            keyboard.append([
-                InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"),
-            ])
+        if not user:
+            return
+        if await self._check_blocked(update, user.id) or await self._check_subscription(update, user.id, context.bot):
+            return
+        welcome_text, keyboard = self._build_main_menu(
+            user.first_name or "User", full_welcome=False
+        )
 
         await query.edit_message_text(
             welcome_text,
@@ -458,17 +511,41 @@ class VPNBot:
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
+    async def stats_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Команда /stats для администраторов"""
+        user = update.effective_user
+        if not user or user.id not in self.config.admin_ids:
+            await update.message.reply_text("⛔ У вас нет доступа к этой команде.")
+            return
+
+        stats = await self.db.get_stats()
+        text = f"""
+📊 *Статистика бота*
+
+✅ Оплаченных заказов: {stats['orders_succeeded']}
+⏳ Ожидают оплаты: {stats['orders_pending']}
+💰 Выручка: {stats['revenue']:.0f} ₽
+
+🎁 Trial пользователей: {stats['trial_users']}
+👥 Рефералов: {stats['referrals']}
+"""
+        await update.message.reply_text(text, parse_mode="Markdown")
+
     def build_application(self) -> Application:
         """Создать приложение бота"""
         app = Application.builder().token(self.config.bot_token).build()
 
         app.add_handler(CommandHandler("start", self.start))
+        app.add_handler(CommandHandler("stats", self.stats_command))
         app.add_handler(CallbackQueryHandler(self.buy_callback, pattern="^buy:"))
         app.add_handler(
             CallbackQueryHandler(self.my_subscription_callback, pattern="^my_subscription$")
         )
         app.add_handler(CallbackQueryHandler(self.trial_callback, pattern="^trial$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
+        app.add_handler(CallbackQueryHandler(self.check_sub_callback, pattern="^check_sub$"))
         app.add_handler(CallbackQueryHandler(self.back_callback, pattern="^back$"))
 
         return app

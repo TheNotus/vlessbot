@@ -5,129 +5,115 @@ Telegram-бот для продажи VPN ключей с интеграцией
 ## Возможности
 
 - Выбор тарифного плана в боте
+- **Принудительная подписка** — требование подписки на Telegram-канал перед использованием
+- **Веб-админ-панель** — управление пользователями, блокировка, отзыв ключей, настройки (.env)
+- **Управление пользователями** — блокировка и отзыв ключей прямо из панели
 - Оплата через Yookassa (карты, СБП, ЮMoney)
 - Автоматическое создание пользователя в Remnawave
-- Выдача группы подписок (Internal Squad) после оплаты
-- Отправка ссылки на подписку в Telegram
-- **Пробный период** — настраиваемое количество дней (TRIAL_DAYS)
-- **Реферальная программа** — бонусные дни за приглашённых (REFERRAL_DAYS)
-
-## Требования
-
-- Python 3.10+
-- Панель Remnawave с настроенными Internal Squads
-- Аккаунт Yookassa
-- Домен с HTTPS для webhook
+- **Nginx** — reverse proxy с поддержкой SSL (Let's Encrypt)
+- Пробный период и реферальная программа
+- Команда `/stats` для администраторов
 
 ## Установка
 
-### Одна команда (рекомендуется)
+Единый скрипт полной установки (требуется root):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/TheNotus/vlessbot/main/install.sh | sudo bash
 ```
 
-Скрипт клонирует репозиторий и выполняет полную установку.
-
-### Полная установка из локальной папки
+или из локальной копии:
 
 ```bash
 git clone https://github.com/TheNotus/vlessbot.git && cd vlessbot
-chmod +x install.sh
 sudo ./install.sh
 ```
 
-### Лёгкая (Linux/macOS)
+Скрипт устанавливает: **Remnawave Panel** (Docker), **Subscription Page**, Python 3.10+, nginx, certbot, зависимости, systemd-сервис, cron, logrotate.
 
+## Настройка
+
+**Полностью автоматическая установка** (домен + SSL + панель + бот):
 ```bash
-chmod +x install.sh
-./install.sh
+WEBHOOK_DOMAIN=bot.your-domain.com \
+PANEL_DOMAIN=panel.your-domain.com \
+SUB_DOMAIN=sub.your-domain.com \
+CERTBOT_EMAIL=admin@your-domain.com \
+sudo ./install.sh
 ```
+- `WEBHOOK_DOMAIN` — домен для webhook бота
+- `PANEL_DOMAIN` — домен для Remnawave Panel (опционально)
+- `SUB_DOMAIN` — домен для Subscription Page (опционально)
+- `CERTBOT_EMAIL` — email для Let's Encrypt
+- `REMNAWAVE_PANEL_INSTALL=false` — отключить установку панели (если уже есть)
 
-### Автоматическая (Windows)
+Скрипт автоматически: установит Docker и Remnawave Panel, настроит nginx, SSL, обновит .env, запустит сервисы.
 
-```cmd
-install.bat
-```
+**Ручная настройка** (если не указаны переменные):
+1. `sudo nano /opt/vpn-bot/.env` — укажите WEBHOOK_BASE_URL, токены, пароли
+2. `sudo nano /etc/nginx/sites-available/vpn-bot` — server_name=ваш-домен
+3. `sudo certbot --nginx -d ваш-домен`
+4. В Yookassa: URL уведомлений = `https://ваш-домен/webhook/yookassa`
+5. `sudo systemctl start vpn-bot`
 
-### Ручная
+## Админ-панель
 
+Панель доступна **только через SSH-туннель** (127.0.0.1). В `.env`:
+- `ADMIN_PANEL_ENABLED=true`
+- `ADMIN_PANEL_PASSWORD=ваш_пароль`
+- `ADMIN_PANEL_PORT=8080` (по умолчанию)
+
+Подключение:
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# или venv\Scripts\activate  # Windows
-
-pip install -r requirements.txt
-cp .env.example .env
-# Редактирование .env
+ssh -L 8080:127.0.0.1:8080 user@ваш_сервер
 ```
+Откройте http://127.0.0.1:8080 в браузере.
 
-**Подробная инструкция с нуля:** см. [SETUP.md](SETUP.md)
+**Функции панели:**
+- Дашборд — статистика (заказы, выручка, trial, рефералы)
+- Пользователи — блокировка, разблокировка, отзыв ключей
+- Настройки — просмотр и редактирование .env
 
-## Конфигурация
+## Принудительная подписка
 
-### 1. Remnawave
+Чтобы требовать подписку на канал перед использованием бота:
+- `FORCED_CHANNEL_ID=-1001234567890` (ID канала)
+- `FORCED_CHANNEL_USERNAME=@mychannel` (для ссылки)
 
-1. Войдите в панель Remnawave
-2. Создайте **Internal Squad** (группу подписок) в разделе Internal Squads
-3. Скопируйте UUID группы
-4. Укажите в `.env`:
-   - `REMNAWAVE_SQUAD_UUID` — UUID группы
-   - `REMNAWAVE_SUBSCRIPTION_URL` — URL страницы подписок (Subscription Page)
+Бот должен быть администратором канала.
 
-### 2. Yookassa
+## Nginx
 
-1. Зарегистрируйтесь на [yookassa.ru](https://yookassa.ru)
-2. Получите Shop ID и Secret Key в личном кабинете
-3. Настройте Webhook: URL уведомлений = `https://your-domain.com/webhook/yookassa`
-
-### 3. Webhook
-
-Webhook должен быть доступен по HTTPS. Для разработки можно использовать [ngrok](https://ngrok.com):
-
-```bash
-ngrok http 8000
-# Используйте выданный URL в WEBHOOK_BASE_URL
-```
-
-## Запуск
-
-```bash
-# Режим webhook (бот + приём платежей)
-MODE=webhook python main.py
-
-# Только бот (без оплаты, для тестов)
-MODE=bot python main.py
-```
+Webhook слушает на `127.0.0.1:8000`. Nginx проксирует запросы с вашего домена на этот порт. Конфиг: `/etc/nginx/sites-available/vpn-bot`.
 
 ## Структура проекта
 
 ```
-├── main.py              # Точка входа
+├── main.py              # Точка входа (webhook + админ-панель)
 ├── bot.py               # Telegram бот
+├── admin_panel.py       # Веб-админ-панель
 ├── webhook.py           # Webhook Yookassa
 ├── cleanup_expired.py   # Очистка истёкших ключей (cron)
-├── logging_config.py    # Настройка логов
+├── database.py          # SQLite: заказы, trial, blocked_users
 ├── config.py            # Конфигурация
-├── database.py          # SQLite база заказов
 ├── remnawave_client.py  # API Remnawave
 ├── yookassa_client.py   # API Yookassa
-├── install.sh           # Полная установка Ubuntu
-├── requirements.txt
+├── utils.py
+├── install.sh           # Полная установка (nginx + certbot)
 └── .env.example
 ```
 
-## Тарифы
+## Управление
 
-По умолчанию:
-- 1 месяц — 199 ₽
-- 3 месяца — 499 ₽
-- 12 месяцев — 1499 ₽
-
-Настройка через переменную `PLANS` в `.env` (формат: `id:name:price:days:gb;squad_uuid`).
+```bash
+sudo systemctl start vpn-bot      # Запуск
+sudo systemctl stop vpn-bot       # Остановка
+sudo systemctl restart vpn-bot    # Перезапуск
+sudo journalctl -u vpn-bot -f     # Логи
+```
 
 ## Безопасность
 
-- Не коммитьте `.env` в репозиторий
-- Используйте HTTPS для webhook
-- Храните секреты Yookassa и Remnawave в безопасном месте
+- Админ-панель только через SSH-туннель (127.0.0.1)
+- Не коммитьте `.env`
+- Используйте HTTPS (certbot + Let's Encrypt)

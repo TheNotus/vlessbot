@@ -11,6 +11,7 @@ from telegram import Bot
 from config import Config
 from database import Database
 from remnawave_client import RemnawaveClient, RemnawaveError
+from utils import extract_short_uuid, get_subscription_url
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,7 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
             telegram_id=telegram_id,
         )
 
-        short_uuid = user_data.get("shortUuid") or user_data.get("short_uuid")
-        if not short_uuid:
-            # Пробуем получить из вложенных данных
-            user_obj = user_data.get("user", user_data)
-            short_uuid = user_obj.get("shortUuid") or user_obj.get("short_uuid")
+        short_uuid = extract_short_uuid(user_data)
 
         if not short_uuid:
             logger.error(f"Short UUID не найден в ответе Remnawave: {user_data}")
@@ -139,11 +136,9 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
                     logger.error(f"Ошибка начисления реферального бонуса: {e}")
 
         # Формируем URL подписки
-        base_url = config.remnawave.subscription_base_url
-        if base_url:
-            subscription_url = f"{base_url.rstrip('/')}/sub/{short_uuid}"
-        else:
-            subscription_url = f"[Укажите REMNAWAVE_SUBSCRIPTION_URL в .env]/sub/{short_uuid}"
+        subscription_url = get_subscription_url(
+            short_uuid, config.remnawave.subscription_base_url
+        )
 
         # Отправляем сообщение пользователю в Telegram
         if telegram_bot:
@@ -178,9 +173,31 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
     except RemnawaveError as e:
         logger.error(f"Ошибка Remnawave при создании пользователя: {e}")
         await db.update_order_status(payment_id, "failed")
+        await _notify_payment_failure(telegram_id, plan.name, str(e))
     except Exception as e:
         logger.exception(f"Ошибка обработки платежа {payment_id}")
         await db.update_order_status(payment_id, "failed")
+        await _notify_payment_failure(telegram_id, plan.name, str(e))
+
+
+async def _notify_payment_failure(
+    telegram_id: int, plan_name: str, error_msg: str
+) -> None:
+    """Уведомить пользователя об ошибке обработки платежа"""
+    if not telegram_bot:
+        return
+    try:
+        await telegram_bot.send_message(
+            chat_id=telegram_id,
+            text=(
+                "❌ *Оплата получена, но возникла ошибка при активации подписки.*\n\n"
+                f"Тариф: {plan_name}\n\n"
+                "Обратитесь в поддержку — мы исправим ситуацию в ближайшее время."
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"Не удалось отправить уведомление об ошибке: {e}")
 
 
 @app.get("/return")
@@ -210,7 +227,11 @@ async def health():
     return {"status": "ok"}
 
 
-def run_webhook_server(cfg: Config, host: str = "0.0.0.0", port: int = 8000) -> None:
+def run_webhook_server(
+    cfg: Config,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+) -> None:
     """Запустить webhook сервер"""
     global config, db, remnawave, telegram_bot
 
@@ -219,6 +240,9 @@ def run_webhook_server(cfg: Config, host: str = "0.0.0.0", port: int = 8000) -> 
     db = Database()
     remnawave = RemnawaveClient(cfg.remnawave)
     telegram_bot = Bot(token=cfg.bot_token) if cfg.bot_token else None
+
+    host = host or cfg.webhook_host
+    port = port if port is not None else cfg.webhook_port
 
     # Инициализация БД
     loop = asyncio.new_event_loop()

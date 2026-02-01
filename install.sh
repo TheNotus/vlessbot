@@ -1,88 +1,55 @@
 #!/bin/bash
-# VPN Bot - Полная установка на чистый Ubuntu
-# Использование:
-#   curl -sSL https://raw.githubusercontent.com/TheNotus/vlessbot/main/install.sh | sudo bash
-#   sudo ./install.sh  — полная установка из локальной папки
-#   ./install.sh       — лёгкая установка (только venv и зависимости)
+# VPN Bot — единый скрипт полной установки (бот + Remnawave Panel)
+# Использование: curl -sSL .../install.sh | sudo bash  или: sudo ./install.sh
+# Автоматизация: WEBHOOK_DOMAIN=bot.example.com CERTBOT_EMAIL=admin@example.com sudo ./install.sh
+# С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.example.com (опционально)
 
 set -e
 
 REPO_URL="${VPN_BOT_REPO:-https://github.com/TheNotus/vlessbot.git}"
 REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
+REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-true}"
 
-# Определение исходной директории проекта
-# При curl | bash: $0="bash", проекта нет — клонируем из git
 SCRIPT_DIR=""
 if [ -n "$0" ] && [ -f "$0" ] 2>/dev/null; then
     cd "$(dirname "$0")" 2>/dev/null || true
     SCRIPT_DIR="$(pwd)"
 fi
-# Проверка: в SCRIPT_DIR есть проект? (main.py, requirements.txt)
 if [ -z "$SCRIPT_DIR" ] || [ ! -f "${SCRIPT_DIR}/main.py" ] || [ ! -f "${SCRIPT_DIR}/requirements.txt" ]; then
     SCRIPT_DIR=""
 fi
 
-# Проверка root — полная или лёгкая установка
-FULL_INSTALL=false
-if [ "$EUID" -eq 0 ]; then
-    FULL_INSTALL=true
+if [ "$EUID" -ne 0 ]; then
+    echo "Требуется root. Запустите: sudo ./install.sh"
+    echo "Или: curl -sSL .../install.sh | sudo bash"
+    exit 1
 fi
 
-# Конфигурация установки
 INSTALL_DIR="${VPN_BOT_INSTALL_DIR:-/opt/vpn-bot}"
 BOT_USER="${VPN_BOT_USER:-vpnbot}"
 LOG_DIR="/var/log/vpn-bot"
 SERVICE_NAME="vpn-bot"
+REMNAWAVE_DIR="${REMNAWAVE_DIR:-/opt/remnawave}"
+PANEL_DOMAIN="${PANEL_DOMAIN:-}"
+SUB_DOMAIN="${SUB_DOMAIN:-}"
+PANEL_PORT="${PANEL_PORT:-8080}"
+SUB_PORT="${SUB_PORT:-8081}"
 
-if [ "$FULL_INSTALL" = true ]; then
-    echo "=========================================="
-    echo "  VPN Bot - Полная установка Ubuntu"
-    echo "=========================================="
-    echo ""
-    echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
-    echo ""
-else
-    echo "=========================================="
-    echo "  VPN Bot - Лёгкая установка"
-    echo "=========================================="
-    INSTALL_DIR="$SCRIPT_DIR"
-    echo ""
-fi
-
-# Лёгкая установка (без sudo) — требует локальный проект
-if [ "$FULL_INSTALL" = false ]; then
-    if [ -z "$SCRIPT_DIR" ]; then
-        echo "Лёгкая установка требует локальную копию проекта."
-        echo "Выполните: git clone $REPO_URL && cd vlessbot && ./install.sh"
-        exit 1
-    fi
-    echo "Установка в текущую директорию: $SCRIPT_DIR"
-    INSTALL_DIR="$SCRIPT_DIR"
-    if ! command -v python3 &>/dev/null; then
-        echo "Ошибка: Python 3 не найден"
-        exit 1
-    fi
-    cd "$INSTALL_DIR"
-    python3 -m venv venv 2>/dev/null || true
-    source venv/bin/activate
-    pip install --upgrade pip -q
-    pip install -r requirements.txt -q
-    [ ! -f .env ] && cp .env.example .env && echo "Создан .env"
-    python3 -c "import asyncio; from database import Database; asyncio.run(Database().init())" 2>/dev/null || true
-    echo "Готово. Отредактируйте .env и запустите: python main.py"
-    exit 0
-fi
-
-# === Полная установка (с sudo) ===
+echo "=========================================="
+echo "  VPN Bot — Полная установка"
+echo "=========================================="
+echo ""
+echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
+echo ""
 
 # 1. Обновление системы
-echo "[1/8] Обновление системы..."
+echo "[1/10] Обновление системы..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get upgrade -y -qq
 
 # 2. Установка зависимостей
-echo "[2/8] Установка Python и зависимостей..."
+echo "[2/10] Установка Python, nginx и зависимостей..."
 apt-get install -y -qq \
     python3 \
     python3-pip \
@@ -92,9 +59,115 @@ apt-get install -y -qq \
     git \
     cron \
     logrotate \
-    rsync
+    rsync \
+    nginx \
+    certbot \
+    python3-certbot-nginx
 
-# Ubuntu 22.04+ имеет Python 3.10, для 20.04 может понадобиться PPA
+# 2b. Установка Remnawave Panel (Docker + Panel + Subscription Page)
+if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+    echo "[2b/10] Установка Remnawave Panel..."
+    if ! command -v docker &>/dev/null; then
+        echo "  Установка Docker..."
+        curl -fsSL https://get.docker.com | sh
+        systemctl enable docker
+        systemctl start docker
+    fi
+    if ! command -v docker &>/dev/null; then
+        apt-get install -y -qq docker.io docker-compose-v2
+        systemctl enable docker
+        systemctl start docker
+    fi
+    mkdir -p "$REMNAWAVE_DIR"
+    # Subscription page вызывает API панели — при одном хосте используем internal URL
+    PANEL_URL_FOR_SUB="http://panel:3000"
+    cat > "$REMNAWAVE_DIR/docker-compose.yml" << REMNAWAVEEOF
+services:
+  panel:
+    image: remnawave/panel:latest
+    container_name: remnawave-panel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PANEL_PORT}:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+
+  subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SUB_PORT}:3000"
+    environment:
+      - REMNAWAVE_PANEL_URL=${PANEL_URL_FOR_SUB}
+      - REMNAWAVE_API_TOKEN=\${REMNAWAVE_API_TOKEN:-}
+    depends_on:
+      - panel
+REMNAWAVEEOF
+    cat > "$REMNAWAVE_DIR/.env" << REMNAWAVEENV
+# Добавьте API токен после создания в панели: Settings -> API Tokens
+REMNAWAVE_API_TOKEN=
+REMNAWAVEENV
+    cd "$REMNAWAVE_DIR"
+    docker compose pull -q 2>/dev/null || docker-compose pull -q 2>/dev/null || true
+    docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true
+    echo "  Remnawave Panel: http://127.0.0.1:$PANEL_PORT (nginx ниже)"
+    echo "  Subscription Page: http://127.0.0.1:$SUB_PORT"
+
+    # Nginx для панели и subscription page
+    if [ -n "$PANEL_DOMAIN" ]; then
+        cat > /etc/nginx/sites-available/remnawave-panel << NGINXPANELEOF
+server {
+    listen 80;
+    server_name $PANEL_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:$PANEL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINXPANELEOF
+        ln -sf /etc/nginx/sites-available/remnawave-panel /etc/nginx/sites-enabled/ 2>/dev/null || true
+        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$PANEL_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null || true
+        echo "  Panel: https://$PANEL_DOMAIN"
+    fi
+    if [ -n "$SUB_DOMAIN" ]; then
+        cat > /etc/nginx/sites-available/remnawave-sub << NGINXSUBEOF
+server {
+    listen 80;
+    server_name $SUB_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:$SUB_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINXSUBEOF
+        ln -sf /etc/nginx/sites-available/remnawave-sub /etc/nginx/sites-enabled/ 2>/dev/null || true
+        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$SUB_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null || true
+        echo "  Subscription: https://$SUB_DOMAIN"
+    fi
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+
+    # Обновить .env бота (если ещё не создан, будет ниже)
+    REMNAWAVE_API_URL="http://127.0.0.1:$PANEL_PORT"
+    REMNAWAVE_SUB_URL="http://127.0.0.1:$SUB_PORT"
+    [ -n "$PANEL_DOMAIN" ] && REMNAWAVE_API_URL="https://$PANEL_DOMAIN"
+    [ -n "$SUB_DOMAIN" ] && REMNAWAVE_SUB_URL="https://$SUB_DOMAIN"
+fi
+
+# 3. Python 3.10+
+echo "[3/10] Проверка Python..."
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0")
 if [[ "$(printf '%s\n' "3.10" "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10" ]] && [[ "$PYTHON_VERSION" != "0" ]]; then
     echo "  Добавление PPA для Python 3.10..."
@@ -105,38 +178,32 @@ if [[ "$(printf '%s\n' "3.10" "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10"
 else
     PYTHON_CMD=python3
 fi
-
 echo "  Python: $($PYTHON_CMD --version)"
 
-# 3. Создание пользователя и директорий
-echo "[3/8] Создание пользователя и директорий..."
+# 4. Пользователь и директории
+echo "[4/10] Создание пользователя и директорий..."
 if ! id "$BOT_USER" &>/dev/null; then
     useradd -r -m -s /bin/bash "$BOT_USER"
 fi
-
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOG_DIR"
 chown -R "$BOT_USER:$BOT_USER" "$LOG_DIR"
 chmod 755 "$LOG_DIR"
 
-# 4. Получение/копирование файлов проекта
-echo "[4/8] Установка проекта..."
+# 5. Проект
+echo "[5/10] Установка проекта..."
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/main.py" ] && [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
-    # Есть локальный проект — копируем
     rsync -a --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
-        "$SCRIPT_DIR/" "$INSTALL_DIR/" 2>/dev/null || \
-    cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/" 2>/dev/null || true
+        "$SCRIPT_DIR/" "$INSTALL_DIR/" 2>/dev/null || cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/" 2>/dev/null || true
 else
-    # curl | bash — клонируем из репозитория
     TMP_CLONE=$(mktemp -d)
     trap "rm -rf $TMP_CLONE" EXIT
-    echo "  Клонирование из $REPO_URL ($REPO_BRANCH)..."
     git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_CLONE"
     rsync -a --exclude='.git' "$TMP_CLONE/" "$INSTALL_DIR/"
 fi
 
-# 5. Виртуальное окружение и зависимости
-echo "[5/8] Установка Python-зависимостей..."
+# 6. Python-зависимости
+echo "[6/10] Установка Python-зависимостей..."
 cd "$INSTALL_DIR"
 $PYTHON_CMD -m venv venv
 source venv/bin/activate
@@ -144,24 +211,74 @@ pip install --upgrade pip -q
 pip install -r requirements.txt -q
 echo "  Зависимости установлены"
 
-# Инициализация БД
 $PYTHON_CMD -c "
 import asyncio
 from database import Database
 asyncio.run(Database().init())
-print('  База данных инициализирована')
-" 2>/dev/null || echo "  (БД создастся при первом запуске)"
+print('  БД инициализирована')
+" 2>/dev/null || echo "  (БД при первом запуске)"
 
-# 6. Конфигурация .env
+# 7. .env
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
     echo ""
-    echo "  ⚠ Создан .env — ОБЯЗАТЕЛЬНО отредактируйте перед запуском!"
+    echo "  ⚠ Создан .env — ОБЯЗАТЕЛЬНО отредактируйте!"
 fi
 chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
 
-# 7. Systemd сервис
-echo "[6/8] Настройка автозапуска (systemd)..."
+# 8. Nginx (webhook бота)
+echo "[7/10] Настройка nginx..."
+WEBHOOK_DOMAIN="${WEBHOOK_DOMAIN:-bot.example.com}"
+WEBHOOK_PORT="${WEBHOOK_PORT:-8000}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
+cat > /etc/nginx/sites-available/vpn-bot << NGINXEOF
+server {
+    listen 80;
+    server_name $WEBHOOK_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:$WEBHOOK_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINXEOF
+ln -sf /etc/nginx/sites-available/vpn-bot /etc/nginx/sites-enabled/ 2>/dev/null || true
+rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || echo "  Nginx: отредактируйте /etc/nginx/sites-available/vpn-bot (server_name)"
+echo "  Nginx: server_name=$WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
+
+# Обновить .env: WEBHOOK_BASE_URL
+if [ -f "$INSTALL_DIR/.env" ] && [ "$WEBHOOK_DOMAIN" != "bot.example.com" ]; then
+    WEBHOOK_URL="https://$WEBHOOK_DOMAIN"
+    if grep -q "^WEBHOOK_BASE_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        sed -i "s|^WEBHOOK_BASE_URL=.*|WEBHOOK_BASE_URL=$WEBHOOK_URL|" "$INSTALL_DIR/.env"
+    else
+        echo "WEBHOOK_BASE_URL=$WEBHOOK_URL" >> "$INSTALL_DIR/.env"
+    fi
+    echo "  .env: WEBHOOK_BASE_URL=$WEBHOOK_URL"
+fi
+
+# Certbot SSL (автоматически, если заданы WEBHOOK_DOMAIN и CERTBOT_EMAIL)
+if [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && [ -n "$CERTBOT_EMAIL" ]; then
+    echo "  Запуск certbot для $WEBHOOK_DOMAIN..."
+    if certbot --nginx -d "$WEBHOOK_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null; then
+        echo "  SSL: сертификат получен"
+    else
+        echo "  SSL: не удалось (проверьте DNS: $WEBHOOK_DOMAIN -> IP сервера)"
+    fi
+fi
+
+# Обновить .env бота: REMNAWAVE_* (если панель установлена)
+if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    [ -n "$REMNAWAVE_API_URL" ] && (grep -q "^REMNAWAVE_API_URL=" "$INSTALL_DIR/.env" && sed -i "s|^REMNAWAVE_API_URL=.*|REMNAWAVE_API_URL=$REMNAWAVE_API_URL|" "$INSTALL_DIR/.env" || echo "REMNAWAVE_API_URL=$REMNAWAVE_API_URL" >> "$INSTALL_DIR/.env")
+    [ -n "$REMNAWAVE_SUB_URL" ] && (grep -q "^REMNAWAVE_SUBSCRIPTION_URL=" "$INSTALL_DIR/.env" && sed -i "s|^REMNAWAVE_SUBSCRIPTION_URL=.*|REMNAWAVE_SUBSCRIPTION_URL=$REMNAWAVE_SUB_URL|" "$INSTALL_DIR/.env" || echo "REMNAWAVE_SUBSCRIPTION_URL=$REMNAWAVE_SUB_URL" >> "$INSTALL_DIR/.env")
+fi
+
+# 9. Systemd
+echo "[8/10] Настройка systemd..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=VPN Telegram Bot
@@ -173,7 +290,6 @@ Type=simple
 User=$BOT_USER
 Group=$BOT_USER
 WorkingDirectory=$INSTALL_DIR
-Environment="MODE=webhook"
 Environment="VPN_BOT_LOG_DIR=$LOG_DIR"
 EnvironmentFile=-$INSTALL_DIR/.env
 ExecStart=$INSTALL_DIR/venv/bin/python main.py
@@ -189,16 +305,14 @@ EOF
 
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
-echo "  Сервис $SERVICE_NAME включён в автозапуск"
+echo "  Сервис включён"
 
-# 8. Cron для очистки истёкших ключей
-echo "[7/8] Настройка очистки истёкших ключей (cron)..."
+# 10. Cron
+echo "[9/10] Cron и завершение..."
 CRON_CMD="0 4 * * * $BOT_USER cd $INSTALL_DIR && $INSTALL_DIR/venv/bin/python cleanup_expired.py >> $LOG_DIR/cleanup.log 2>&1"
 (crontab -l -u $BOT_USER 2>/dev/null | grep -v "cleanup_expired.py" || true; echo "$CRON_CMD") | crontab -u $BOT_USER -
-echo "  Cron: ежедневно в 4:00"
 
-# 9. Logrotate
-echo "[8/8] Настройка ротации логов..."
+# Logrotate
 cat > /etc/logrotate.d/vpn-bot << EOF
 $LOG_DIR/*.log {
     daily
@@ -210,29 +324,43 @@ $LOG_DIR/*.log {
     create 0640 $BOT_USER $BOT_USER
 }
 EOF
-echo "  Logrotate настроен (14 дней, сжатие)"
+
+# Автозапуск сервиса
+echo "  Запуск сервиса..."
+systemctl start $SERVICE_NAME 2>/dev/null || true
 
 echo ""
 echo "=========================================="
 echo "  Установка завершена!"
 echo "=========================================="
 echo ""
-echo "Следующие шаги:"
-echo "  1. Отредактируйте конфигурацию:"
+echo "Автоматически выполнено:"
+echo "  - Nginx: $WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
+[ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && echo "  - Remnawave Panel: $REMNAWAVE_DIR (порты $PANEL_PORT, $SUB_PORT)"
+[ -n "$PANEL_DOMAIN" ] && echo "  - Panel: https://$PANEL_DOMAIN"
+[ -n "$SUB_DOMAIN" ] && echo "  - Subscription: https://$SUB_DOMAIN"
+[ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && echo "  - .env: WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN"
+[ -n "$CERTBOT_EMAIL" ] && [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && echo "  - SSL: certbot"
+echo "  - Сервис vpn-bot запущен"
+echo ""
+echo "Сделайте вручную:"
+echo "  1. Отредактируйте .env (токены, пароли, REMNAWAVE_*):"
 echo "     sudo nano $INSTALL_DIR/.env"
 echo ""
-echo "  2. Запустите сервис:"
-echo "     sudo systemctl start $SERVICE_NAME"
+if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+echo "  2. Remnawave Panel:"
+echo "     - Откройте ${PANEL_DOMAIN:-http://IP:$PANEL_PORT} и создайте админа"
+echo "     - Добавьте Node (VPN-сервер), Internal Squad"
+echo "     - Settings -> API Tokens -> создайте токен"
+echo "     - Добавьте токен в $REMNAWAVE_DIR/.env (REMNAWAVE_API_TOKEN)"
+echo "     - cd $REMNAWAVE_DIR && docker compose restart subscription-page"
 echo ""
-echo "  3. Проверьте статус:"
-echo "     sudo systemctl status $SERVICE_NAME"
+fi
+echo "  3. В Yookassa укажите URL уведомлений:"
+echo "     https://$WEBHOOK_DOMAIN/webhook/yookassa"
 echo ""
-echo "  4. Просмотр логов:"
-echo "     sudo journalctl -u $SERVICE_NAME -f"
-echo "     или: tail -f $LOG_DIR/vpn-bot.log"
+echo "Логи: sudo journalctl -u $SERVICE_NAME -f"
 echo ""
-echo "Управление:"
-echo "  Запуск:   sudo systemctl start $SERVICE_NAME"
-echo "  Остановка: sudo systemctl stop $SERVICE_NAME"
-echo "  Перезапуск: sudo systemctl restart $SERVICE_NAME"
+echo "Админ-панель (ADMIN_PANEL_ENABLED=true):"
+echo "  ssh -L 8080:127.0.0.1:8080 user@server -> http://127.0.0.1:8080"
 echo ""

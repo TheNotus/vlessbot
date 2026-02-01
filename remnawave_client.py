@@ -1,11 +1,49 @@
 """Клиент API Remnawave для управления пользователями VPN"""
-import uuid
-from datetime import datetime, timedelta
-from typing import Optional
+import logging
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Optional, TypeVar
 
 import requests
 
 from config import PlanConfig, RemnawaveConfig
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _retry(
+    func: Callable[..., T],
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+) -> Callable[..., T]:
+    """Повторить вызов при временных ошибках"""
+    def wrapper(*args: Any, **kwargs: Any) -> T:
+        last_exc: Optional[Exception] = None
+        current_delay = delay
+        for attempt in range(max_attempts):
+            try:
+                return func(*args, **kwargs)
+            except RemnawaveError as e:
+                last_exc = e
+                if e.status_code and e.status_code in (401, 500, 502, 503) and attempt < max_attempts - 1:
+                    logger.warning(f"Remnawave retry {attempt + 1}/{max_attempts}: {e}")
+                    time.sleep(current_delay)
+                    current_delay *= backoff
+                else:
+                    raise
+            except requests.RequestException as e:
+                last_exc = e
+                if attempt < max_attempts - 1:
+                    logger.warning(f"Remnawave retry {attempt + 1}/{max_attempts}: {e}")
+                    time.sleep(current_delay)
+                    current_delay *= backoff
+                else:
+                    raise RemnawaveError(str(e)) from e
+        raise last_exc or RemnawaveError("Unknown error")
+    return wrapper
 
 
 class RemnawaveError(Exception):
@@ -25,6 +63,10 @@ class RemnawaveClient:
         self.password = config.password
         self.default_squad_uuid = config.squad_uuid
         self._token: Optional[str] = None
+
+    def _clear_token(self) -> None:
+        """Сбросить токен (для переавторизации при 401)"""
+        self._token = None
 
     def _get_token(self) -> str:
         """Получить JWT токен авторизации"""
@@ -56,10 +98,10 @@ class RemnawaveClient:
         self,
         method: str,
         path: str,
-        json: Optional[dict] = None,
+        json_data: Optional[dict] = None,
         params: Optional[dict] = None,
     ) -> dict:
-        """Выполнить запрос к API"""
+        """Выполнить запрос к API (с retry и обновлением токена при 401)"""
         url = f"{self.base_url}{path}"
         headers = {
             "Authorization": f"Bearer {self._get_token()}",
@@ -69,11 +111,16 @@ class RemnawaveClient:
         response = requests.request(
             method=method,
             url=url,
-            json=json,
+            json=json_data,
             params=params,
             headers=headers,
             timeout=30,
         )
+
+        if response.status_code == 401:
+            self._clear_token()
+            logger.info("Remnawave 401: токен сброшен, повторная авторизация")
+            return self._request(method, path, json_data, params)
 
         if response.status_code >= 400:
             raise RemnawaveError(
@@ -130,7 +177,7 @@ class RemnawaveClient:
         if telegram_id:
             payload["telegramId"] = str(telegram_id)
 
-        response = self._request("POST", "/api/users", json=payload)
+        response = _retry(lambda: self._request("POST", "/api/users", json_data=payload))()
 
         return response
 
@@ -190,7 +237,7 @@ class RemnawaveClient:
         new_exp = exp_dt + timedelta(days=additional_days)
         new_exp_str = new_exp.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-        return self._request("PATCH", "/api/users", json={
+        return self._request("PATCH", "/api/users", json_data={
             "uuid": user_uuid,
             "expirationTime": new_exp_str,
         })
@@ -266,3 +313,25 @@ class RemnawaveClient:
             return True
         except RemnawaveError:
             return False
+
+    def revoke_user_by_telegram_id(self, telegram_id: int) -> tuple[int, list[str]]:
+        """
+        Отозвать ключи пользователя по Telegram ID (удалить из Remnawave).
+        Возвращает (количество удалённых, список UUID).
+        """
+        users = self.get_user_by_telegram_id(telegram_id)
+        if not users:
+            return 0, []
+        user_list = users if isinstance(users, list) else [users]
+        deleted = 0
+        uuids: list[str] = []
+        for u in user_list:
+            user_uuid = u.get("uuid") or u.get("id")
+            if user_uuid:
+                try:
+                    self.delete_user(user_uuid)
+                    deleted += 1
+                    uuids.append(user_uuid)
+                except RemnawaveError:
+                    pass
+        return deleted, uuids
