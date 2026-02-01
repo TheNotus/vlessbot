@@ -107,6 +107,17 @@ cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-co
 # Если docker compose не найден — используйте: docker-compose -f ... -f ... up -d
 ```
 
+## Обновление бота
+
+Режим определяется автоматически: если проект уже установлен — выполняется обновление (без перезаписи `.env` и БД):
+
+```bash
+cd /opt/vpn-bot
+sudo ./install.sh
+```
+
+Явно задать режим: `sudo ./install.sh update` (обновление) или `sudo ./install.sh install` (чистая установка).
+
 ## Структура проекта
 
 ```

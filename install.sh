@@ -1,8 +1,10 @@
 #!/bin/bash
 # VPN Bot — единый скрипт полной установки (бот + Remnawave Panel)
 # Использование: curl -sSL .../install.sh | sudo bash  или: sudo ./install.sh
+# Режим выбирается автоматически: если проект уже установлен — обновление, иначе — чистая установка.
+# Явно: sudo ./install.sh update  или  sudo ./install.sh install
 # Автоматизация: WEBHOOK_DOMAIN=bot.example.com CERTBOT_EMAIL=admin@example.com sudo ./install.sh
-# С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.example.com (опционально)
+# С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.domain.com (опционально)
 
 set -e
 # Ошибки и вывод команд установки показываются в консоли (без -qq и скрытия stderr)
@@ -46,11 +48,85 @@ SUB_DOMAIN="${SUB_DOMAIN:-}"
 PANEL_PORT="${PANEL_PORT:-8080}"
 SUB_PORT="${SUB_PORT:-8081}"
 
+# Автоопределение режима: обновление или чистая установка
+# Явно: update / install | VPN_BOT_UPDATE=1 / VPN_BOT_INSTALL=1
+# Авто: если /opt/vpn-bot существует и содержит main.py — режим обновления
+UPDATE_MODE=false
+INSTALL_MODE=false
+if [ "${1:-}" = "update" ] || [ "${VPN_BOT_UPDATE:-0}" = "1" ] || [ "${VPN_BOT_UPDATE:-}" = "true" ]; then
+    UPDATE_MODE=true
+elif [ "${1:-}" = "install" ] || [ "${VPN_BOT_INSTALL:-0}" = "1" ] || [ "${VPN_BOT_INSTALL:-}" = "true" ]; then
+    INSTALL_MODE=true
+else
+    # Автопроверка: проект уже установлен?
+    if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/main.py" ]; then
+        UPDATE_MODE=true
+    fi
+fi
+
+if [ "$UPDATE_MODE" = "true" ]; then
+    echo "=========================================="
+    echo "  VPN Bot — Обновление (данные сохранены)"
+    echo "=========================================="
+    echo ""
+    if [ ! -d "$INSTALL_DIR" ] || [ ! -f "$INSTALL_DIR/main.py" ]; then
+        echo -e "${RED}Проект не установлен. Сначала выполните полную установку.${NC}"
+        echo -e "  (явно: ${CYAN}sudo ./install.sh install${NC})"
+        exit 1
+    fi
+    echo "Директория: $INSTALL_DIR"
+    echo ""
+
+    # Обновление кода из git (если есть .git) или curl
+    cd "$INSTALL_DIR"
+    if [ -d ".git" ]; then
+        echo "[1/4] Обновление из git..."
+        git fetch origin
+        git checkout -q "$REPO_BRANCH" 2>/dev/null || true
+        git pull --rebase origin "$REPO_BRANCH" 2>/dev/null || git pull origin "$REPO_BRANCH" || true
+    else
+        echo "[1/4] Скачивание обновлений..."
+        TMP_CLONE=$(mktemp -d)
+        trap "rm -rf $TMP_CLONE" EXIT
+        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_CLONE"
+        rsync -a --exclude='.env' --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' \
+            --exclude='vpn_bot.db' --exclude='*.db' --exclude='.git' \
+            "$TMP_CLONE/" "$INSTALL_DIR/"
+    fi
+
+    echo "[2/4] Обновление Python-зависимостей..."
+    PY_VENV="$INSTALL_DIR/venv/bin/python"
+    if [ ! -f "$PY_VENV" ]; then
+        echo "  Создание venv..."
+        python3 -m venv "$INSTALL_DIR/venv"
+    fi
+    "$PY_VENV" -m pip install -q --upgrade pip 2>/dev/null || true
+    "$PY_VENV" -m pip install -r "$INSTALL_DIR/requirements.txt"
+
+    echo "[3/4] Проверка БД..."
+    "$PY_VENV" -c "
+import asyncio
+from database import Database
+asyncio.run(Database().init())
+print('  БД в порядке')
+" 2>/dev/null || echo "  (БД — проверьте вручную)"
+
+    chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
+    echo "[4/4] Перезапуск сервиса..."
+    systemctl restart "$SERVICE_NAME"
+    echo ""
+    echo -e "${GREEN}Обновление завершено. Данные (.env, БД) сохранены.${NC}"
+    echo "Логи: sudo journalctl -u $SERVICE_NAME -f"
+    echo ""
+    exit 0
+fi
+
 echo "=========================================="
 echo "  VPN Bot — Полная установка"
 echo "=========================================="
 echo ""
 echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
+echo -e "  (Обновление при следующем запуске: ${CYAN}sudo ./install.sh${NC})"
 echo ""
 
 # Запрос доменов (если не заданы переменными)

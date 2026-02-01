@@ -234,6 +234,31 @@ class Database:
                 stats["orders_pending"] = int(row["cnt"]) if row else 0
             return stats
 
+    async def get_stats_chart_data(self, days: int = 14) -> dict:
+        """Данные для графика: покупки и выручка по дням за последние N дней"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            result: dict = {"labels": [], "orders": [], "revenue": []}
+            async with db.execute(
+                """
+                SELECT date(created_at) as d, COUNT(*) as cnt, COALESCE(SUM(amount), 0) as rev
+                FROM orders
+                WHERE status = 'succeeded' AND created_at >= date('now', ?)
+                GROUP BY date(created_at)
+                ORDER BY d
+                """,
+                (f"-{days} days",),
+            ) as cur:
+                rows = await cur.fetchall()
+                by_date = {r["d"]: {"orders": r["cnt"], "revenue": float(r["rev"])} for r in rows}
+            from datetime import datetime, timedelta
+            for i in range(days - 1, -1, -1):
+                d = (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d")
+                result["labels"].append(d[5:] if len(d) >= 5 else d)
+                result["orders"].append(by_date.get(d, {}).get("orders", 0))
+                result["revenue"].append(by_date.get(d, {}).get("revenue", 0))
+            return result
+
     async def is_blocked(self, telegram_id: int) -> bool:
         """Проверить, заблокирован ли пользователь"""
         async with aiosqlite.connect(self.db_path) as db:

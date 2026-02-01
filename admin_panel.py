@@ -1,12 +1,13 @@
-"""Веб-админ-панель — только через SSH-туннель (127.0.0.1)"""
-import asyncio
+"""Веб-админ-панель бота — стиль Remnawave"""
+import html
+import json
 import logging
 import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import uvicorn
 
@@ -18,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBasic()
 
-# Глобальные (инициализируются при запуске)
 config: Optional[Config] = None
 db: Optional[Database] = None
 remnawave: Optional[RemnawaveClient] = None
@@ -97,22 +97,53 @@ app = FastAPI(title="VPN Bot Admin", docs_url=None, redoc_url=None)
 
 BASE_HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>VPN Bot — Админ-панель</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VPN Bot — Админ</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:20px;background:#1a1a2e;color:#eee}
-a{color:#4fc3f7}nav{margin-bottom:20px;border-bottom:1px solid #333;padding-bottom:10px}
-nav a{margin-right:15px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #444;padding:8px;text-align:left}
-th{background:#16213e}.btn{padding:6px 12px;border:none;border-radius:4px;cursor:pointer;text-decoration:none;display:inline-block}
-.btn-danger{background:#e53935;color:#fff}.btn-success{background:#43a047;color:#fff}.msg{padding:10px;margin:10px 0;border-radius:4px}
-.msg-ok{background:#1b5e20}.msg-err{background:#b71c1c}
+*{box-sizing:border-box}
+:root{--bg:#0f0f14;--card:#16161d;--border:#2a2a35;--text:#e6e6ea;--muted:#8a8a96;--accent:#00d4aa;--accent-hover:#00b894;--danger:#e74c3c;--success:#27ae60}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;margin:0;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-hover)}
+nav{display:flex;gap:1rem;padding:1rem 1.5rem;border-bottom:1px solid var(--border);background:var(--card)}
+nav a{padding:0.5rem 0;font-weight:500}
+main{padding:1.5rem;max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem;margin:0 0 1rem;font-weight:600}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1rem}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.card-stat .label{font-size:0.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
+.card-stat .value{font-size:1.5rem;font-weight:600;margin-top:0.25rem}
+table{border-collapse:collapse;width:100%;font-size:0.9rem}
+th,td{padding:0.75rem 1rem;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:500;font-size:0.8rem;text-transform:uppercase}
+tr:hover td{background:rgba(0,212,170,0.05)}
+.btn{padding:0.5rem 1rem;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem;font-weight:500;display:inline-flex;align-items:center;gap:0.5rem}
+.btn-primary{background:var(--accent);color:var(--bg)}
+.btn-primary:hover{background:var(--accent-hover);color:var(--bg)}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-danger:hover{opacity:0.9}
+.btn-success{background:var(--success);color:#fff}
+.btn-outline{border:1px solid var(--border);background:transparent;color:var(--text)}
+.btn-outline:hover{background:var(--border)}
+.btn-sm{padding:0.35rem 0.75rem;font-size:0.8rem}
+.input{width:100%;max-width:400px;padding:0.5rem 0.75rem;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:0.9rem}
+.input:focus{outline:none;border-color:var(--accent)}
+.msg{padding:0.75rem 1rem;border-radius:6px;margin-bottom:1rem}
+.msg-ok{background:rgba(39,174,96,0.2);border:1px solid var(--success)}
+.setting-row{display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.setting-row:last-child{border-bottom:none}
+.setting-key{font-family:monospace;font-size:0.85rem;min-width:200px}
+.setting-val{flex:1;min-width:200px}
+.chart-wrap{height:280px;margin-top:1rem}
 </style>
 </head>
 <body>
 <nav><a href="/">Дашборд</a> <a href="/users">Пользователи</a> <a href="/settings">Настройки</a></nav>
-{{ content }}
+<main>{{ content }}</main>
 </body>
 </html>
 """
@@ -120,21 +151,49 @@ th{background:#16213e}.btn{padding:6px 12px;border:none;border-radius:4px;cursor
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, _: str = Depends(verify_admin)):
-    """Главная страница — статистика"""
+    """Главная страница — статистика и график"""
     if not db:
         return BASE_HTML.replace("{{ content }}", "<p>БД не инициализирована</p>")
     stats = await db.get_stats()
+    chart_data = await db.get_stats_chart_data(14)
+    chart_labels = json.dumps(chart_data["labels"])
+    chart_orders = json.dumps(chart_data["orders"])
+    chart_revenue = json.dumps(chart_data["revenue"])
     content = f"""
     <h1>Дашборд</h1>
-    <table>
-    <tr><th>Метрика</th><th>Значение</th></tr>
-    <tr><td>Оплаченных заказов</td><td>{stats['orders_succeeded']}</td></tr>
-    <tr><td>Ожидают оплаты</td><td>{stats['orders_pending']}</td></tr>
-    <tr><td>Выручка</td><td>{stats['revenue']:.0f} ₽</td></tr>
-    <tr><td>Trial пользователей</td><td>{stats['trial_users']}</td></tr>
-    <tr><td>Рефералов</td><td>{stats['referrals']}</td></tr>
-    </table>
-    <p><small>Доступ только через SSH-туннель: <code>ssh -L 8080:127.0.0.1:8080 user@server</code></small></p>
+    <div class="card-grid">
+    <div class="card card-stat"><div class="label">Оплаченных заказов</div><div class="value">{stats['orders_succeeded']}</div></div>
+    <div class="card card-stat"><div class="label">Ожидают оплаты</div><div class="value">{stats['orders_pending']}</div></div>
+    <div class="card card-stat"><div class="label">Выручка</div><div class="value">{stats['revenue']:.0f} ₽</div></div>
+    <div class="card card-stat"><div class="label">Trial</div><div class="value">{stats['trial_users']}</div></div>
+    <div class="card card-stat"><div class="label">Рефералов</div><div class="value">{stats['referrals']}</div></div>
+    </div>
+    <div class="card">
+    <h2 style="font-size:1rem;margin:0 0 0.5rem">Покупки и выручка (14 дней)</h2>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </div>
+    <script>
+    new Chart(document.getElementById('chart'), {{
+      type: 'bar',
+      data: {{
+        labels: {chart_labels},
+        datasets: [
+          {{ label: 'Покупки', data: {chart_orders}, backgroundColor: 'rgba(0,212,170,0.6)' }},
+          {{ label: 'Выручка, ₽', data: {chart_revenue}, backgroundColor: 'rgba(0,212,170,0.3)', yAxisID: 'y1' }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {{ legend: {{ labels: {{ color: '#e6e6ea' }} }} }},
+        scales: {{
+          x: {{ ticks: {{ color: '#8a8a96', maxRotation: 45 }} }},
+          y: {{ ticks: {{ color: '#8a8a96' }}, grid: {{ color: '#2a2a35' }} }},
+          y1: {{ position: 'right', ticks: {{ color: '#8a8a96' }}, grid: {{ drawOnChartArea: false }} }}
+        }}
+      }}
+    }});
+    </script>
     """
     return BASE_HTML.replace("{{ content }}", content)
 
@@ -150,23 +209,19 @@ async def users_page(request: Request, _: str = Depends(verify_admin)):
         blocked = u.get("blocked", False)
         act = ""
         if not blocked:
-            act = f'<a class="btn btn-danger" href="/users/block/{u["telegram_id"]}">Заблокировать</a> '
+            act = f'<a class="btn btn-danger btn-sm" href="/users/block/{u["telegram_id"]}">Заблокировать</a> '
         else:
-            act = f'<a class="btn btn-success" href="/users/unblock/{u["telegram_id"]}">Разблокировать</a> '
+            act = f'<a class="btn btn-success btn-sm" href="/users/unblock/{u["telegram_id"]}">Разблокировать</a> '
         if u.get("short_uuid"):
-            act += f'<a class="btn btn-danger" href="/users/revoke/{u["telegram_id"]}" onclick="return confirm(\'Отозвать ключ?\')">Отозвать ключ</a>'
+            act += f'<a class="btn btn-danger btn-sm" href="/users/revoke/{u["telegram_id"]}" onclick="return confirm(\'Отозвать ключ?\')">Отозвать</a>'
         rows.append(
             f"<tr><td>{u['telegram_id']}</td><td>{u['type']}</td><td>{u['plan']}</td>"
-            f"<td>{u['status']}</td><td>{u.get('short_uuid') or '-'}</td>"
-            f"<td>{'🚫 Заблокирован' if blocked else '✅'}</td><td>{act}</td></tr>"
+            f"<td>{u['status']}</td><td><code>{u.get('short_uuid') or '-'}</code></td>"
+            f"<td>{'🚫' if blocked else '✅'}</td><td>{act}</td></tr>"
         )
-    content = """
-    <h1>Пользователи</h1>
-    <table>
-    <tr><th>Telegram ID</th><th>Тип</th><th>Тариф</th><th>Статус</th><th>Short UUID</th><th>Блок</th><th>Действия</th></tr>
-    """ + "\n".join(rows) + """
-    </table>
-    """
+    content = '<h1>Пользователи</h1><div class="card"><table>' + """
+    <tr><th>Telegram ID</th><th>Тип</th><th>Тариф</th><th>Статус</th><th>Short UUID</th><th></th><th>Действия</th></tr>
+    """ + "\n".join(rows) + "</table></div>"
     msg = request.query_params.get("msg", "")
     if msg:
         content = f'<div class="msg msg-ok">{msg}</div>' + content
@@ -204,43 +259,46 @@ async def revoke_user(telegram_id: int, _: str = Depends(verify_admin)):
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, _: str = Depends(verify_admin)):
-    """Настройки из .env"""
+    """Настройки из .env — inline-редактирование"""
     vars_list = load_env_vars()
     rows = []
     for key, val, mask in vars_list:
-        display = "••••••" if mask and val else (val or "(не задано)")
-        rows.append(f"<tr><td><code>{key}</code></td><td>{display}</td>"
-                    f"<td><a href=\"/settings/edit/{key}\">Изменить</a></td></tr>")
+        input_type = "password" if mask and val else "text"
+        placeholder = "••••••" if mask and val else "(не задано)"
+        input_val = val if not (mask and val) else ""
+        rows.append(f'''
+    <div class="setting-row">
+      <span class="setting-key"><code>{html.escape(key)}</code></span>
+      <form method="post" action="/settings/save" class="setting-val" style="display:flex;gap:0.5rem;align-items:center;flex:1;min-width:0">
+        <input type="hidden" name="key" value="{html.escape(key)}">
+        <input type="{input_type}" name="value" value="{html.escape(input_val)}" placeholder="{html.escape(placeholder)}" class="input" style="flex:1;min-width:0">
+        <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+      </form>
+    </div>''')
     content = """
     <h1>Настройки (.env)</h1>
-    <p><small>После изменения перезапустите сервис: <code>sudo systemctl restart vpn-bot</code></small></p>
-    <table>
-    <tr><th>Переменная</th><th>Значение</th><th></th></tr>
+    <div style="margin-bottom:1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <button class="btn btn-outline" id="restartBtn" title="Скопировать команду">
+        Перезапустить сервис
+      </button>
+      <span id="restartMsg" style="color:var(--success);font-size:0.875rem;display:none">Скопировано</span>
+    </div>
+    <div class="card">
     """ + "\n".join(rows) + """
-    </table>
+    </div>
+    <script>
+    document.getElementById('restartBtn').onclick = function() {
+      navigator.clipboard.writeText('sudo systemctl restart vpn-bot').then(() => {
+        var m = document.getElementById('restartMsg');
+        m.style.display = 'inline';
+        setTimeout(() => m.style.display = 'none', 2000);
+      });
+    };
+    </script>
     """
     msg = request.query_params.get("msg", "")
     if msg:
         content = f'<div class="msg msg-ok">{msg}</div>' + content
-    return BASE_HTML.replace("{{ content }}", content)
-
-
-@app.get("/settings/edit/{key}", response_class=HTMLResponse)
-async def settings_edit_form(key: str, request: Request, _: str = Depends(verify_admin)):
-    vars_list = load_env_vars()
-    val = ""
-    for k, v, _ in vars_list:
-        if k == key:
-            val = v
-            break
-    content = f"""
-    <h1>Изменить {key}</h1>
-    <form method="post" action="/settings/save">
-    <input type="hidden" name="key" value="{key}">
-    <input type="text" name="value" value="{val}" style="width:400px">
-    <button type="submit" class="btn btn-success">Сохранить</button>
-    </form>
-    """
     return BASE_HTML.replace("{{ content }}", content)
 
 
@@ -251,8 +309,12 @@ async def settings_save(
     value: str = Form(""),
     _: str = Depends(verify_admin),
 ):
+    secret_keys = ("TOKEN", "PASSWORD", "SECRET", "KEY")
+    is_secret = any(s in key.upper() for s in secret_keys)
+    if is_secret and not value.strip():
+        return RedirectResponse(url="/settings?msg=Пропущено+(пустое+значение+для+секрета).", status_code=302)
     save_env_var(key, value)
-    return RedirectResponse(url=f"/settings?msg=Сохранено.+Перезапустите+сервис.", status_code=302)
+    return RedirectResponse(url=f"/settings?msg=Сохранено.+Нажмите+%C2%ABПерезапустить+сервис%C2%BB.", status_code=302)
 
 
 def run_admin_panel(
