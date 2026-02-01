@@ -151,7 +151,14 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
 
     # Патч healthcheck remnawave-db: упрощение и start_period (обход race при инициализации Postgres)
     sed -i "s|pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}|pg_isready -U postgres -d postgres|" docker-compose-prod.yml
-    sed -i '/timeout: 10s/{n;s/retries: 3/retries: 5\n start_period: 30s/}' docker-compose-prod.yml
+    python3 -c "
+import re
+with open('docker-compose-prod.yml', 'r') as f:
+    c = f.read()
+c = re.sub(r'(\s+timeout: 10s\n)(\s+)(retries:) 3', r'\g<1>\g<2>\g<3> 5\n\g<2>start_period: 30s', c)
+with open('docker-compose-prod.yml', 'w') as f:
+    f.write(c)
+"
 
     # Subscription Page (merge с основным compose)
     cat > docker-compose-sub.yml << REMNAWAVESUB
