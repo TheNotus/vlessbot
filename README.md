@@ -76,11 +76,14 @@ ssh -L 8080:127.0.0.1:8080 user@ваш_сервер
 
 ## Принудительная подписка
 
+Включение/выключение в `.env` — `FORCED_CHANNEL_ENABLED=true` или `false`.
+
 Чтобы требовать подписку на канал перед использованием бота:
+- `FORCED_CHANNEL_ENABLED=true`
 - `FORCED_CHANNEL_ID=-1001234567890` (ID канала)
 - `FORCED_CHANNEL_USERNAME=@mychannel` (для ссылки)
 
-Бот должен быть администратором канала.
+Бот должен быть администратором канала. Чтобы отключить проверку — `FORCED_CHANNEL_ENABLED=false`.
 
 ## Nginx
 

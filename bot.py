@@ -71,6 +71,8 @@ class VPNBot:
 
     async def _check_subscription(self, update: Update, user_id: int, bot) -> bool:
         """Проверить подписку на канал. Возвращает True если нужно подписаться."""
+        if not self.config.forced_channel_enabled:
+            return False
         channel_id = self.config.forced_channel_id
         if not channel_id:
             return False

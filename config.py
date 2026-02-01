@@ -53,7 +53,9 @@ class Config:
     # Реферальная программа: дни к подписке реферера за каждого приглашённого
     referral_days: int = 0
     expired_cleanup_days: int = 7  # 0 = отключено
-    # Принудительная подписка на канал: ID канала (@channel → -100xxxxxxxxxx)
+    # Принудительная подписка на канал: вкл/выкл (FORCED_CHANNEL_ENABLED)
+    forced_channel_enabled: bool = False
+    # ID канала (@channel → -100xxxxxxxxxx)
     forced_channel_id: Optional[str] = None
     # Username канала для ссылки (например @mychannel)
     forced_channel_username: Optional[str] = None
@@ -130,6 +132,7 @@ class Config:
             trial_data_limit_gb=int(os.getenv("TRIAL_DATA_LIMIT_GB", "0")),
             referral_days=int(os.getenv("REFERRAL_DAYS", "0")),
             expired_cleanup_days=int(os.getenv("EXPIRED_CLEANUP_DAYS", "7")),
+            forced_channel_enabled=os.getenv("FORCED_CHANNEL_ENABLED", "false").lower() in ("1", "true", "yes"),
             forced_channel_id=os.getenv("FORCED_CHANNEL_ID") or None,
             forced_channel_username=os.getenv("FORCED_CHANNEL_USERNAME") or None,
             admin_panel_enabled=os.getenv("ADMIN_PANEL_ENABLED", "false").lower() in ("1", "true", "yes"),
