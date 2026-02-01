@@ -281,6 +281,30 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
       <input type="hidden" name="key" value="{html.escape(key)}">
       <textarea name="value" rows="3" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
     </div>''')
+        elif key == "VPN_NAME":
+            ph = "Название VPN (RealityVPN, ApolloVPN...)"
+            rows.append(f'''
+    <div class="setting-row">
+      <span class="setting-key"><code>{html.escape(key)}</code></span>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <input type="text" name="value" value="{html.escape(val)}" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0">
+    </div>''')
+        elif key == "SUPPORT_LINK":
+            ph = "t.me/support или https://t.me/username"
+            rows.append(f'''
+    <div class="setting-row">
+      <span class="setting-key"><code>{html.escape(key)}</code></span>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <input type="text" name="value" value="{html.escape(val)}" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0">
+    </div>''')
+        elif key == "SUPPORT_BUTTON_TEXT":
+            ph = "НАПИСАТЬ"
+            rows.append(f'''
+    <div class="setting-row">
+      <span class="setting-key"><code>{html.escape(key)}</code></span>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <input type="text" name="value" value="{html.escape(val)}" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0">
+    </div>''')
         elif key == "PLANS":
             input_val = val.replace("\\n", "\n") if val else ""
             rows.append(f'''

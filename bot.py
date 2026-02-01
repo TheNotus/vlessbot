@@ -124,16 +124,32 @@ class VPNBot:
     def _build_main_menu(
         self, user_first_name: str, full_welcome: bool = True
     ) -> tuple[str, list[list[InlineKeyboardButton]]]:
-        """Собрать текст и клавиатуру главного меню"""
+        """Собрать текст и клавиатуру главного меню (стиль RealityVPN)"""
+        vpn = self.config.vpn_name
         welcome = self.config.welcome_message.replace("{name}", user_first_name)
+        text = f"👋 *Добро пожаловать в {vpn}!*\n\n👉 {welcome}\n\n"
+        if self.config.support_link:
+            text += "❓ *Есть вопросы? Поддержка*\n\n"
         if full_welcome:
-            text = f"🔐 *VPN сервис*\n\n{welcome}\n\n*Тарифы:*\n"
+            text += "*Тарифы:*\n"
             for plan in self.config.plans:
                 text += f"• *{plan.name}* — {plan.price:.0f} ₽\n"
             text += "\nВыберите тариф 👇"
         else:
-            text = f"🔐 *VPN сервис*\n\n{welcome}\n\nВыберите тариф 👇"
+            text += "Выберите тариф 👇"
         keyboard: list[list[InlineKeyboardButton]] = []
+        if self.config.support_link:
+            link = self.config.support_link
+            if link.startswith("t.me/"):
+                link = "https://" + link
+            elif not link.startswith("http"):
+                link = "https://t.me/" + link.lstrip("@")
+            keyboard.append([
+                InlineKeyboardButton(
+                    self.config.support_button_text,
+                    url=link,
+                )
+            ])
         for plan in self.config.plans:
             keyboard.append([
                 InlineKeyboardButton(
