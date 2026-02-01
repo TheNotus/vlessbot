@@ -162,13 +162,6 @@ class VPNBot:
                     callback_data="trial",
                 )
             ])
-        keyboard.append([
-            InlineKeyboardButton("📋 Моя подписка", callback_data="my_subscription"),
-        ])
-        if self.config.referral_days > 0:
-            keyboard.append([
-                InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"),
-            ])
         return text, keyboard
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
