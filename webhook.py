@@ -116,24 +116,7 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
             short_uuid=short_uuid,
         )
 
-        # Реферальный бонус: добавляем дни рефереру
-        referrer_id = metadata.get("referrer_id")
-        if referrer_id and config.referral_days > 0:
-            referrer_id = int(referrer_id)
-            if referrer_id != telegram_id:
-                try:
-                    if remnawave.extend_user_by_telegram_id(referrer_id, config.referral_days):
-                        await db.add_referral(referrer_id, telegram_id)
-                        if telegram_bot:
-                            try:
-                                await telegram_bot.send_message(
-                                    chat_id=referrer_id,
-                                    text=f"🎉 Ваш реферал оплатил подписку! Вам добавлено +{config.referral_days} дней к подписке.",
-                                )
-                            except Exception:
-                                pass
-                except Exception as e:
-                    logger.error(f"Ошибка начисления реферального бонуса: {e}")
+        # Реферальный бонус начисляется при переходе по ссылке (см. bot.py start)
 
         # Формируем URL подписки
         subscription_url = get_subscription_url(

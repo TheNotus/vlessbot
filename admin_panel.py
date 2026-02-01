@@ -270,7 +270,17 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
         input_type = "password" if mask and val else "text"
         placeholder = "••••••" if mask and val else "(не задано)"
         input_val = val if not (mask and val) else ""
-        rows.append(f'''
+        if key == "MAIN_MENU_INFO":
+            # Текстовая область для информации главного меню (поддерживает \n)
+            input_val = val.replace("\\n", "\n") if val else ""
+            rows.append(f'''
+    <div class="setting-row" style="align-items:flex-start">
+      <span class="setting-key" style="min-width:140px"><code>{html.escape(key)}</code></span>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <textarea name="value" rows="4" placeholder="Информация под кнопками меню. Для новой строки — Enter" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
+    </div>''')
+        else:
+            rows.append(f'''
     <div class="setting-row">
       <span class="setting-key"><code>{html.escape(key)}</code></span>
       <input type="hidden" name="key" value="{html.escape(key)}">
@@ -332,11 +342,15 @@ async def settings_save_all(
     for key, value in zip(keys, values):
         if not key:
             continue
+        val = str(value)
         is_secret = any(s in key.upper() for s in secret_keys)
-        if is_secret and not str(value).strip():
+        if is_secret and not val.strip():
             skipped += 1
             continue
-        save_env_var(key, str(value))
+        # Для MAIN_MENU_INFO сохраняем переносы как \n в .env
+        if key == "MAIN_MENU_INFO":
+            val = val.replace("\r\n", "\n").replace("\n", "\\n")
+        save_env_var(key, val)
         saved += 1
     msg = f"Сохранено: {saved}." + (f" Пропущено (пустые секреты): {skipped}." if skipped else "")
     return RedirectResponse(url=f"/settings?msg={msg.replace(' ', '+')}", status_code=302)

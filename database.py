@@ -189,6 +189,29 @@ class Database:
                 except Exception:
                     return False
 
+    async def user_is_new(self, telegram_id: int) -> bool:
+        """Проверить, был ли пользователь раньше в базе (заказы или trial)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM orders WHERE telegram_id = ? LIMIT 1",
+                (telegram_id,),
+            ) as cur:
+                if await cur.fetchone():
+                    return False
+            async with db.execute(
+                "SELECT 1 FROM trial_users WHERE telegram_id = ? LIMIT 1",
+                (telegram_id,),
+            ) as cur:
+                if await cur.fetchone():
+                    return False
+            async with db.execute(
+                "SELECT 1 FROM referrals WHERE referral_id = ? LIMIT 1",
+                (telegram_id,),
+            ) as cur:
+                if await cur.fetchone():
+                    return False  # уже приходил по реф-ссылке
+        return True
+
     async def add_referral(self, referrer_id: int, referral_id: int, order_id: Optional[int] = None) -> bool:
         """Записать реферала"""
         async with self._lock:
