@@ -142,7 +142,17 @@ REMNAWAVEENV
     cd "$REMNAWAVE_DIR"
     docker compose pull -q 2>/dev/null || docker-compose pull -q 2>/dev/null || true
     docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true
-    echo "  Remnawave Panel: http://127.0.0.1:$PANEL_PORT (nginx ниже)"
+    sleep 4
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-panel$'; then
+        echo "  ⚠ Контейнер remnawave-panel не запущен, повторный запуск..."
+        (cd "$REMNAWAVE_DIR" && docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true)
+        sleep 3
+    fi
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-panel$'; then
+        echo "  Remnawave Panel: http://127.0.0.1:$PANEL_PORT (nginx ниже)"
+    else
+        echo "  ⚠ Remnawave Panel: контейнер не запущен. После установки: cd $REMNAWAVE_DIR && sudo docker compose up -d"
+    fi
     echo "  Subscription Page: http://127.0.0.1:$SUB_PORT"
 
     # Nginx для панели и subscription page
@@ -253,6 +263,36 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
     echo ""
     echo "  ⚠ Создан .env — ОБЯЗАТЕЛЬНО отредактируйте!"
 fi
+
+# Пароль админ-панели: если пустой — сгенерировать и вывести в конце
+GENERATED_ADMIN_PASSWORD=""
+if [ -f "$INSTALL_DIR/.env" ]; then
+    if ! grep -q '^ADMIN_PANEL_PASSWORD=.\+' "$INSTALL_DIR/.env" 2>/dev/null; then
+        GENERATED_ADMIN_PASSWORD=$(openssl rand -hex 8)
+        if grep -q '^ADMIN_PANEL_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s|^ADMIN_PANEL_PASSWORD=.*|ADMIN_PANEL_PASSWORD=$GENERATED_ADMIN_PASSWORD|" "$INSTALL_DIR/.env"
+        else
+            echo "ADMIN_PANEL_PASSWORD=$GENERATED_ADMIN_PASSWORD" >> "$INSTALL_DIR/.env"
+        fi
+    fi
+    # Админ-панель: включить по умолчанию, если не задано иначе переменной окружения
+    if [ "${ADMIN_PANEL_ENABLED}" != "false" ]; then
+        if grep -q '^ADMIN_PANEL_ENABLED=' "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s|^ADMIN_PANEL_ENABLED=.*|ADMIN_PANEL_ENABLED=true|" "$INSTALL_DIR/.env"
+        else
+            echo "ADMIN_PANEL_ENABLED=true" >> "$INSTALL_DIR/.env"
+        fi
+    fi
+    # Конфликт портов: Remnawave Panel на 8080 — админ-панель бота на 8082
+    if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+        if grep -q '^ADMIN_PANEL_PORT=' "$INSTALL_DIR/.env" 2>/dev/null; then
+            sed -i "s|^ADMIN_PANEL_PORT=.*|ADMIN_PANEL_PORT=8082|" "$INSTALL_DIR/.env"
+        else
+            echo "ADMIN_PANEL_PORT=8082" >> "$INSTALL_DIR/.env"
+        fi
+    fi
+fi
+
 chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
 
 # 8. Nginx (webhook бота)
@@ -362,32 +402,64 @@ echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      🎉 Установка успешно завершена! 🎉      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"
 echo ""
-echo -e "Webhook бота доступен по адресу:"
-echo -e "  - ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
+echo -e "${RED}СДЕЛАЙТЕ ПО ПОРЯДКУ (скопируйте команды):${NC}"
 echo ""
-echo -e "${RED}ПЕРВЫЕ ШАГИ:${NC}"
-echo -e "1. Отредактируйте .env — токены, пароли, REMNAWAVE_*:"
-echo -e "   ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"
-echo ""
-echo -e "2. В YooKassa укажите URL уведомлений:"
-echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
-echo ""
+
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
-echo -e "3. Remnawave Panel:"
+echo -e "${CYAN}Шаг 1. Remnawave Panel (панель VPN)${NC}"
 if [ -n "$PANEL_DOMAIN" ]; then
-echo -e "   - Панель: ${YELLOW}https://${PANEL_DOMAIN}${NC}"
+echo -e "   Откройте в браузере: ${YELLOW}https://${PANEL_DOMAIN}${NC}"
 else
 SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-echo -e "   - Панель: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
+echo -e "   Откройте в браузере: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
 fi
-echo -e "   - Создайте админа, добавьте Node, Internal Squad"
-echo -e "   - Settings -> API Tokens -> создайте токен"
-echo -e "   - Добавьте токен в $REMNAWAVE_DIR/.env (REMNAWAVE_API_TOKEN)"
-echo -e "   - ${CYAN}cd $REMNAWAVE_DIR && docker compose restart subscription-page${NC}"
+echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
+echo -e "   • Добавьте Node (VPN-сервер), создайте Internal Squad (группу подписок)"
+echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
+echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
+echo -e "     (строка REMNAWAVE_API_TOKEN=). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
+echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo docker compose restart subscription-page${NC}"
+echo ""
+echo -e "${CYAN}Шаг 2. Файл настроек бота (.env)${NC}"
+echo -e "   Откройте: ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"
+echo -e "   Заполните (где взять — в скобках):"
+echo -e "   • TELEGRAM_BOT_TOKEN — токен от @BotFather в Telegram"
+echo -e "   • ADMIN_IDS — ваш Telegram ID (число, можно узнать у @userinfobot)"
+echo -e "   • YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY — из личного кабинета ЮKassa"
+echo -e "   • REMNAWAVE_USERNAME и REMNAWAVE_PASSWORD — логин и пароль из шага 1"
+echo -e "   • REMNAWAVE_SQUAD_UUID — UUID группы (Internal Squad) из Remnawave"
+echo -e "   • REMNAWAVE_SUBSCRIPTION_URL — уже подставлен; если меняли домен — поправьте"
+echo -e "   Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
+echo ""
+echo -e "${CYAN}Шаг 3. ЮKassa${NC}"
+echo -e "   В личном кабинете ЮKassa → Настройки → Уведомления укажите URL:"
+echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
+echo ""
+echo -e "${CYAN}Шаг 4. Перезапуск бота${NC}"
+echo -e "   ${CYAN}sudo systemctl restart vpn-bot${NC}"
+echo ""
+else
+echo -e "${CYAN}Шаг 1. Файл настроек бота (.env)${NC}"
+echo -e "   Откройте: ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"
+echo -e "   Заполните: TELEGRAM_BOT_TOKEN (от @BotFather), ADMIN_IDS, YOOKASSA_*, REMNAWAVE_*"
+echo -e "   Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
+echo ""
+echo -e "${CYAN}Шаг 2. ЮKassa${NC}"
+echo -e "   URL уведомлений: ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
+echo ""
+echo -e "${CYAN}Шаг 3. Перезапуск бота${NC}"
+echo -e "   ${CYAN}sudo systemctl restart vpn-bot${NC}"
 echo ""
 fi
+
+ADMIN_PORT_FINAL=8080
+[ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && ADMIN_PORT_FINAL=8082
+echo -e "${CYAN}Админ-панель бота${NC} (управление пользователями, .env):"
+echo -e "   С вашего компьютера: ${CYAN}ssh -L ${ADMIN_PORT_FINAL}:127.0.0.1:${ADMIN_PORT_FINAL} ВАШ_ЛОГИН@IP_ЭТОГО_СЕРВЕРА${NC}"
+echo -e "   Затем в браузере откройте: ${YELLOW}http://127.0.0.1:${ADMIN_PORT_FINAL}${NC}"
+if [ -n "$GENERATED_ADMIN_PASSWORD" ]; then
+    echo -e "   Пароль для входа: ${YELLOW}${GENERATED_ADMIN_PASSWORD}${NC} (смените в панели в Настройках)"
+fi
+echo ""
 echo -e "Логи бота: ${CYAN}sudo journalctl -u $SERVICE_NAME -f${NC}"
-echo ""
-echo -e "Админ-панель (ADMIN_PANEL_ENABLED=true):"
-echo -e "  ${CYAN}ssh -L 8080:127.0.0.1:8080 user@server${NC} → http://127.0.0.1:8080"
 echo ""

@@ -2,6 +2,8 @@
 
 Telegram-бот для продажи VPN ключей с интеграцией **Remnawave** и **Yookassa**.
 
+> **Новичок?** Запустите установку одной командой ниже. В конце скрипт выведет **пошаговую инструкцию** — выполняйте шаги по порядку (Remnawave → .env → ЮKassa → перезапуск бота).
+
 ## Возможности
 
 - Выбор тарифного плана в боте
@@ -16,13 +18,15 @@ Telegram-бот для продажи VPN ключей с интеграцией
 
 ## Установка
 
-Единый скрипт полной установки (требуется root):
+**Одна команда** (нужен root, Ubuntu/Debian):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/TheNotus/vlessbot/main/install.sh | sudo bash
 ```
 
-или из локальной копии:
+Скрипт спросит: домен для бота, email для SSL, домены для панели (можно пропустить). После установки в консоли появится **пошаговая инструкция** — выполняйте шаги по порядку.
+
+Или из локальной копии:
 
 ```bash
 git clone https://github.com/TheNotus/vlessbot.git && cd vlessbot
@@ -49,25 +53,29 @@ sudo ./install.sh
 
 Скрипт автоматически: установит Docker и Remnawave Panel, настроит nginx, SSL, обновит .env, запустит сервисы.
 
-**Ручная настройка** (если не указаны переменные):
-1. `sudo nano /opt/vpn-bot/.env` — укажите WEBHOOK_BASE_URL, токены, пароли
-2. `sudo nano /etc/nginx/sites-available/vpn-bot` — server_name=ваш-домен
-3. `sudo certbot --nginx -d ваш-домен`
-4. В Yookassa: URL уведомлений = `https://ваш-домен/webhook/yookassa`
-5. `sudo systemctl start vpn-bot`
+**Порядок после установки** (то же самое выводится в консоли):
+1. **Remnawave Panel** — откройте в браузере (домен или IP:8080), создайте админа, Node, Internal Squad, API-токен; вставьте токен в `/opt/remnawave/.env`.
+2. **Файл бота** — `sudo nano /opt/vpn-bot/.env`: TELEGRAM_BOT_TOKEN (от @BotFather), ADMIN_IDS (ваш Telegram ID), YOOKASSA_* (из кабинета ЮKassa), REMNAWAVE_* (логин/пароль и UUID из шага 1). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X.
+3. **ЮKassa** — в настройках уведомлений укажите URL `https://ваш-домен/webhook/yookassa`.
+4. **Перезапуск** — `sudo systemctl restart vpn-bot`.
 
-## Админ-панель
+## Две панели (не путать)
 
-Панель доступна **только через SSH-туннель** (127.0.0.1). В `.env`:
+- **Remnawave Panel** — панель VPN (ноды, подписки, Internal Squad). Доступ по домену (`PANEL_DOMAIN`) или по IP:8080. Порт 8080.
+- **Админ-панель бота** — управление ботом (пользователи, блокировка, .env). Только через SSH-туннель, не в интернете. При установке вместе с Remnawave использует порт **8082** (8080 занят Remnawave).
+
+## Админ-панель бота
+
+Доступна **только через SSH-туннель** (127.0.0.1). В `.env`:
 - `ADMIN_PANEL_ENABLED=true`
 - `ADMIN_PANEL_PASSWORD=ваш_пароль`
-- `ADMIN_PANEL_PORT=8080` (по умолчанию)
+- `ADMIN_PANEL_PORT=8080` (или **8082**, если установлен Remnawave на 8080)
 
-Подключение:
+Подключение (порт 8082 при установке с Remnawave):
 ```bash
-ssh -L 8080:127.0.0.1:8080 user@ваш_сервер
+ssh -L 8082:127.0.0.1:8082 user@ваш_сервер
 ```
-Откройте http://127.0.0.1:8080 в браузере.
+Откройте http://127.0.0.1:8082 в браузере. Без Remnawave — порт 8080.
 
 **Функции панели:**
 - Дашборд — статистика (заказы, выручка, trial, рефералы)
@@ -85,9 +93,18 @@ ssh -L 8080:127.0.0.1:8080 user@ваш_сервер
 
 Бот должен быть администратором канала. Чтобы отключить проверку — `FORCED_CHANNEL_ENABLED=false`.
 
-## Nginx
+## Nginx и Certbot
+
+Перед запуском certbot выполните `sudo nginx -t`. При ошибке «No such file or directory» для файла в `sites-enabled` удалите битую симлинку: `sudo rm /etc/nginx/sites-enabled/имя_файла`.
 
 Webhook слушает на `127.0.0.1:8000`. Nginx проксирует запросы с вашего домена на этот порт. Конфиг: `/etc/nginx/sites-available/vpn-bot`.
+
+## Если панель Remnawave не открывается (502)
+
+Проверьте, что контейнер запущен: `docker ps` (должен быть `remnawave-panel`), и порт: `ss -tlnp | grep 8080`. Если контейнера нет:
+```bash
+cd /opt/remnawave && sudo docker compose up -d
+```
 
 ## Структура проекта
 

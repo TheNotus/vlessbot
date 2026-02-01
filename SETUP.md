@@ -451,6 +451,15 @@ REFERRAL_DAYS=7
 
 ---
 
+## Две панели (не путать)
+
+- **Remnawave Panel** — панель VPN (ноды, подписки, Internal Squad). Доступ по домену (`PANEL_DOMAIN`) или по IP:8080. Порт 8080.
+- **Админ-панель бота** — управление ботом (пользователи, блокировка, .env). Только через SSH-туннель. При установке по install.sh вместе с Remnawave порт админ-панели бота — **8082** (8080 занят Remnawave). Подключение: `ssh -L 8082:127.0.0.1:8082 user@server` → http://127.0.0.1:8082.
+
+Перед запуском certbot выполните `sudo nginx -t`. При ошибке «No such file or directory» для файла в `sites-enabled` удалите битую симлинку: `sudo rm /etc/nginx/sites-enabled/имя_файла.conf`.
+
+---
+
 ## Решение проблем
 
 | Проблема | Решение |
@@ -460,6 +469,8 @@ REFERRAL_DAYS=7
 | Webhook не вызывается | Проверьте доступность URL из интернета, HTTPS, настройки Yookassa |
 | Подписка не приходит | Проверьте логи бота и webhook, настройки Yookassa webhook |
 | Реферальные дни не начисляются | Реферер должен иметь активного пользователя в Remnawave (купленную подписку) |
+| **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave-panel`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose up -d` |
+| certbot / nginx: «No such file or directory» | Удалите битую симлинку в `sites-enabled`: `sudo rm /etc/nginx/sites-enabled/имя_файла.conf`, затем `sudo nginx -t` |
 
 ---
 

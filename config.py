@@ -135,7 +135,7 @@ class Config:
             forced_channel_enabled=os.getenv("FORCED_CHANNEL_ENABLED", "false").lower() in ("1", "true", "yes"),
             forced_channel_id=os.getenv("FORCED_CHANNEL_ID") or None,
             forced_channel_username=os.getenv("FORCED_CHANNEL_USERNAME") or None,
-            admin_panel_enabled=os.getenv("ADMIN_PANEL_ENABLED", "false").lower() in ("1", "true", "yes"),
+            admin_panel_enabled=os.getenv("ADMIN_PANEL_ENABLED", "false").lower() in ("1", "true", "yes", "enable"),
             admin_panel_port=int(os.getenv("ADMIN_PANEL_PORT", "8080")),
             admin_panel_password=os.getenv("ADMIN_PANEL_PASSWORD", ""),
             remnawave=remnawave,
