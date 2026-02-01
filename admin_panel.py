@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -270,14 +271,23 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
         input_type = "password" if mask and val else "text"
         placeholder = "••••••" if mask and val else "(не задано)"
         input_val = val if not (mask and val) else ""
-        if key == "MAIN_MENU_INFO":
-            # Текстовая область для информации главного меню (поддерживает \n)
+        if key in ("MAIN_MENU_INFO", "WELCOME_MESSAGE"):
+            # Текстовые области (поддерживают \n)
+            input_val = val.replace("\\n", "\n") if val else ""
+            ph = "Текст приветствия. {name} — имя" if key == "WELCOME_MESSAGE" else "Кнопка «ℹ️ Информация». Enter для новой строки"
+            rows.append(f'''
+    <div class="setting-row" style="align-items:flex-start">
+      <span class="setting-key" style="min-width:140px"><code>{html.escape(key)}</code></span>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <textarea name="value" rows="3" placeholder="{html.escape(ph)}" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
+    </div>''')
+        elif key == "PLANS":
             input_val = val.replace("\\n", "\n") if val else ""
             rows.append(f'''
     <div class="setting-row" style="align-items:flex-start">
       <span class="setting-key" style="min-width:140px"><code>{html.escape(key)}</code></span>
       <input type="hidden" name="key" value="{html.escape(key)}">
-      <textarea name="value" rows="4" placeholder="Информация под кнопками меню. Для новой строки — Enter" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
+      <textarea name="value" rows="2" placeholder="id:название:цена:дней; Пример: monthly:1 месяц:199:30;yearly:12 месяцев:1499:365" class="input setting-val" style="flex:1;min-width:0;resize:vertical">{html.escape(input_val)}</textarea>
     </div>''')
         else:
             rows.append(f'''
@@ -309,22 +319,20 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
 
 @app.post("/settings/restart")
 async def settings_restart(_: str = Depends(verify_admin)):
-    """Перезапуск сервиса vpn-bot (требует sudoers)"""
-    try:
-        result = subprocess.run(
-            ["sudo", "systemctl", "restart", SERVICE_NAME],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return RedirectResponse(url="/settings?msg=Сервис+перезапущен.", status_code=302)
-        err = (result.stderr or result.stdout or "unknown")[:80].replace(" ", "+").replace("\n", " ")
-        return RedirectResponse(url=f"/settings?msg=Ошибка+перезапуска.+Запустите+sudo+./install.sh+update", status_code=302)
-    except subprocess.TimeoutExpired:
-        return RedirectResponse(url="/settings?msg=Таймаут+перезапуска.", status_code=302)
-    except Exception as e:
-        return RedirectResponse(url="/settings?msg=Ошибка.+Запустите+sudo+./install.sh+update", status_code=302)
+    """Перезапуск сервиса vpn-bot (отложенный, чтобы redirect успел уйти)"""
+    def do_restart():
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", SERVICE_NAME],
+                capture_output=True,
+                timeout=15,
+            )
+        except Exception:
+            pass
+
+    # Перезапуск через 2 сек — успеем отправить redirect, иначе браузер остаётся на /settings/restart
+    threading.Timer(2.0, do_restart).start()
+    return RedirectResponse(url="/settings?msg=Сервис+перезапускается...", status_code=302)
 
 
 @app.post("/settings/save_all")
@@ -347,8 +355,8 @@ async def settings_save_all(
         if is_secret and not val.strip():
             skipped += 1
             continue
-        # Для MAIN_MENU_INFO сохраняем переносы как \n в .env
-        if key == "MAIN_MENU_INFO":
+        # Для многострочных сохраняем переносы как \n в .env
+        if key in ("MAIN_MENU_INFO", "WELCOME_MESSAGE"):
             val = val.replace("\r\n", "\n").replace("\n", "\\n")
         save_env_var(key, val)
         saved += 1

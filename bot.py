@@ -25,13 +25,6 @@ from remnawave_client import RemnawaveClient, RemnawaveError
 from utils import extract_short_uuid, get_subscription_url
 from yookassa_client import create_payment, init_yookassa
 
-
-def _escape_markdown(text: str) -> str:
-    """Экранировать спецсимволы Markdown для пользовательского текста"""
-    for c in "_*[]()`":
-        text = text.replace(c, "\\" + c)
-    return text
-
 # Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -118,6 +111,8 @@ class VPNBot:
         buttons = [
             [KeyboardButton("🛒 Тарифы"), KeyboardButton("📋 Моя подписка")],
         ]
+        if self.config.main_menu_info:
+            buttons.append([KeyboardButton("ℹ️ Информация")])
         if self.config.referral_days > 0:
             buttons.append([KeyboardButton("👥 Реферальная программа")])
         return ReplyKeyboardMarkup(
@@ -130,23 +125,14 @@ class VPNBot:
         self, user_first_name: str, full_welcome: bool = True
     ) -> tuple[str, list[list[InlineKeyboardButton]]]:
         """Собрать текст и клавиатуру главного меню"""
+        welcome = self.config.welcome_message.replace("{name}", user_first_name)
         if full_welcome:
-            text = f"""
-🔐 *Добро пожаловать в VPN сервис!*
-
-Привет, {user_first_name}! Здесь вы можете приобрести VPN подписку для безопасного и свободного доступа в интернет.
-
-*Доступные тарифы:*
-"""
+            text = f"🔐 *VPN сервис*\n\n{welcome}\n\n*Тарифы:*\n"
             for plan in self.config.plans:
-                text += f"\n• *{plan.name}* — {plan.price:.0f} ₽"
-            text += "\n\nВыберите тариф или действие 👇"
+                text += f"• *{plan.name}* — {plan.price:.0f} ₽\n"
+            text += "\nВыберите тариф 👇"
         else:
-            text = f"""
-🔐 *VPN сервис*
-
-Привет, {user_first_name}! Выберите тариф или действие.
-"""
+            text = f"🔐 *VPN сервис*\n\n{welcome}\n\nВыберите тариф 👇"
         keyboard: list[list[InlineKeyboardButton]] = []
         for plan in self.config.plans:
             keyboard.append([
@@ -208,10 +194,8 @@ class VPNBot:
             parse_mode="Markdown",
             reply_markup=reply_markup,
         )
-        menu_msg = "Выберите действие:"
-        if self.config.main_menu_info:
-            menu_msg += "\n\n" + self.config.main_menu_info
-        await update.message.reply_text(menu_msg, reply_markup=reply_kbd)
+        # Reply-клавиатура (кнопки снизу) — минимальный текст
+        await update.message.reply_text("\u200b", reply_markup=reply_kbd)
 
     async def buy_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -537,12 +521,9 @@ class VPNBot:
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        menu_msg = "Выберите действие:"
-        if self.config.main_menu_info:
-            menu_msg += "\n\n" + self.config.main_menu_info
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text=menu_msg,
+            text="\u200b",
             reply_markup=self._get_main_reply_keyboard(),
         )
 
@@ -562,8 +543,6 @@ class VPNBot:
             welcome_text, keyboard = self._build_main_menu(
                 user.first_name or "User", full_welcome=False
             )
-            if self.config.main_menu_info:
-                welcome_text += "\n\n" + _escape_markdown(self.config.main_menu_info)
             await update.message.reply_text(
                 welcome_text,
                 parse_mode="Markdown",
@@ -572,6 +551,8 @@ class VPNBot:
         elif text == "📋 Моя подписка":
             # Симулируем callback — создаём фейковый update с callback_query
             await self._handle_my_subscription_via_message(update, context)
+        elif text == "ℹ️ Информация":
+            await self._handle_info_via_message(update, context)
         elif text == "👥 Реферальная программа":
             await self._handle_referral_via_message(update, context)
 
@@ -639,6 +620,21 @@ class VPNBot:
                     "❌ Не удалось загрузить подписку. Попробуйте позже.",
                     reply_markup=self._get_main_reply_keyboard(),
                 )
+
+    async def _handle_info_via_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Показать информацию (кнопка «ℹ️ Информация»)"""
+        if not self.config.main_menu_info:
+            await update.message.reply_text(
+                "Информация не настроена.",
+                reply_markup=self._get_main_reply_keyboard(),
+            )
+            return
+        await update.message.reply_text(
+            self.config.main_menu_info,
+            reply_markup=self._get_main_reply_keyboard(),
+        )
 
     async def _handle_referral_via_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -725,11 +721,9 @@ class VPNBot:
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.check_sub_callback, pattern="^check_sub$"))
         app.add_handler(CallbackQueryHandler(self.back_callback, pattern="^back$"))
+        patterns = r"^(🛒 Тарифы|📋 Моя подписка|ℹ️ Информация|👥 Реферальная программа)$"
         app.add_handler(
-            MessageHandler(
-                filters.Regex(r"^(🛒 Тарифы|📋 Моя подписка|👥 Реферальная программа)$"),
-                self.main_menu_message,
-            )
+            MessageHandler(filters.Regex(patterns), self.main_menu_message),
         )
 
         return app
