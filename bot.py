@@ -126,10 +126,13 @@ class VPNBot:
     ) -> tuple[str, list[list[InlineKeyboardButton]]]:
         """Собрать текст и клавиатуру главного меню"""
         vpn = self.config.vpn_name
-        welcome = self.config.welcome_message.replace("{name}", user_first_name)
-        text = f"👋 *Добро пожаловать в {vpn}!*\n\n👉 {welcome}\n\n"
+        text = f"👋 *Добро пожаловать в {vpn}!*\n\n"
+        if self.config.welcome_message:
+            welcome = self.config.welcome_message.replace("{name}", user_first_name)
+            text += f"{welcome}\n\n"
+        text += f"{self.config.keyboard_info}\n\n"
         if self.config.support_link:
-            text += "❓ *Есть вопросы? Поддержка*\n\n"
+            text += "❓ *По тех вопросам — Поддержка*\n\n"
         if full_welcome:
             text += "*Тарифы:*\n"
             for plan in self.config.plans:

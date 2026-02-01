@@ -54,11 +54,13 @@ class Config:
     referral_days: int = 0
     # Название VPN сервиса
     vpn_name: str = "RealityVPN"
+    # Информация о клавиатуре
+    keyboard_info: str = "Ниже доступны кнопки для выбора тарифа, подписки и других действий."
     # Ссылка на поддержку (пусто — блок скрыт)
     support_link: str = ""
     support_button_text: str = "НАПИСАТЬ"
-    # Приветствие при /start. {name} подставляется
-    welcome_message: str = "Нажмите «🛒 Тарифы» ниже, чтобы выбрать подписку."
+    # Приветствие при /start. {name} подставляется (опционально)
+    welcome_message: str = ""
     # Информация — кнопка «ℹ️ Информация»
     main_menu_info: str = ""
     expired_cleanup_days: int = 7  # 0 = отключено
@@ -140,10 +142,11 @@ class Config:
             trial_days=int(os.getenv("TRIAL_DAYS", "0")),
             trial_data_limit_gb=int(os.getenv("TRIAL_DATA_LIMIT_GB", "0")),
             referral_days=int(os.getenv("REFERRAL_DAYS", "0")),
-            vpn_name=os.getenv("VPN_NAME", "VPN"),
+            vpn_name=os.getenv("VPN_NAME", "RealityVPN"),
+            keyboard_info=(os.getenv("KEYBOARD_INFO") or "Ниже доступны кнопки для выбора тарифа, подписки и других действий.").replace("\\n", "\n"),
             support_link=(os.getenv("SUPPORT_LINK") or "").strip(),
             support_button_text=os.getenv("SUPPORT_BUTTON_TEXT", "НАПИСАТЬ"),
-            welcome_message=(os.getenv("WELCOME_MESSAGE") or "Нажмите «🛒 Тарифы» ниже, чтобы выбрать подписку.").replace("\\n", "\n"),
+            welcome_message=(os.getenv("WELCOME_MESSAGE") or "").replace("\\n", "\n"),
             main_menu_info=(os.getenv("MAIN_MENU_INFO") or "").replace("\\n", "\n"),
             expired_cleanup_days=int(os.getenv("EXPIRED_CLEANUP_DAYS", "7")),
             forced_channel_enabled=os.getenv("FORCED_CHANNEL_ENABLED", "false").lower() in ("1", "true", "yes"),
