@@ -149,6 +149,10 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
     # Порт панели: host PANEL_PORT -> container 3000
     sed -i "s|- 127.0.0.1:3000:\${APP_PORT:-3000}|- 127.0.0.1:${PANEL_PORT}:3000|" docker-compose-prod.yml
 
+    # Патч healthcheck remnawave-db: упрощение и start_period (обход race при инициализации Postgres)
+    sed -i "s|pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}|pg_isready -U postgres -d postgres|" docker-compose-prod.yml
+    sed -i '/timeout: 10s/{n;s/retries: 3/retries: 5\n start_period: 30s/}' docker-compose-prod.yml
+
     # Subscription Page (merge с основным compose)
     cat > docker-compose-sub.yml << REMNAWAVESUB
 services:
