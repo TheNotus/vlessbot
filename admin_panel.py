@@ -3,6 +3,7 @@ import html
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -257,9 +258,12 @@ async def revoke_user(telegram_id: int, _: str = Depends(verify_admin)):
     return RedirectResponse(url=f"/users?msg={msg.replace(' ', '+')}", status_code=302)
 
 
+SERVICE_NAME = os.getenv("VPN_BOT_SERVICE", "vpn-bot")
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, _: str = Depends(verify_admin)):
-    """Настройки из .env — inline-редактирование"""
+    """Настройки из .env — одна форма, одна кнопка сохранения"""
     vars_list = load_env_vars()
     rows = []
     for key, val, mask in vars_list:
@@ -269,37 +273,73 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
         rows.append(f'''
     <div class="setting-row">
       <span class="setting-key"><code>{html.escape(key)}</code></span>
-      <form method="post" action="/settings/save" class="setting-val" style="display:flex;gap:0.5rem;align-items:center;flex:1;min-width:0">
-        <input type="hidden" name="key" value="{html.escape(key)}">
-        <input type="{input_type}" name="value" value="{html.escape(input_val)}" placeholder="{html.escape(placeholder)}" class="input" style="flex:1;min-width:0">
-        <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
-      </form>
+      <input type="hidden" name="key" value="{html.escape(key)}">
+      <input type="{input_type}" name="value" value="{html.escape(input_val)}" placeholder="{html.escape(placeholder)}" class="input setting-val" style="flex:1;min-width:0">
     </div>''')
     content = """
     <h1>Настройки (.env)</h1>
     <div style="margin-bottom:1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-      <button class="btn btn-outline" id="restartBtn" title="Скопировать команду">
-        Перезапустить сервис
-      </button>
-      <span id="restartMsg" style="color:var(--success);font-size:0.875rem;display:none">Скопировано</span>
+      <form method="post" action="/settings/restart" style="display:inline">
+        <button type="submit" class="btn btn-primary">Перезапустить сервис</button>
+      </form>
+      <span id="restartMsg" style="color:var(--success);font-size:0.875rem"></span>
     </div>
-    <div class="card">
+    <form method="post" action="/settings/save_all" class="card">
     """ + "\n".join(rows) + """
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <button type="submit" class="btn btn-primary">Сохранить всё</button>
     </div>
-    <script>
-    document.getElementById('restartBtn').onclick = function() {
-      navigator.clipboard.writeText('sudo systemctl restart vpn-bot').then(() => {
-        var m = document.getElementById('restartMsg');
-        m.style.display = 'inline';
-        setTimeout(() => m.style.display = 'none', 2000);
-      });
-    };
-    </script>
+    </form>
     """
     msg = request.query_params.get("msg", "")
     if msg:
         content = f'<div class="msg msg-ok">{msg}</div>' + content
     return BASE_HTML.replace("{{ content }}", content)
+
+
+@app.post("/settings/restart")
+async def settings_restart(_: str = Depends(verify_admin)):
+    """Перезапуск сервиса vpn-bot (требует sudoers)"""
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", SERVICE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            return RedirectResponse(url="/settings?msg=Сервис+перезапущен.", status_code=302)
+        err = (result.stderr or result.stdout or "unknown")[:80].replace(" ", "+").replace("\n", " ")
+        return RedirectResponse(url=f"/settings?msg=Ошибка+перезапуска.+Запустите+sudo+./install.sh+update", status_code=302)
+    except subprocess.TimeoutExpired:
+        return RedirectResponse(url="/settings?msg=Таймаут+перезапуска.", status_code=302)
+    except Exception as e:
+        return RedirectResponse(url="/settings?msg=Ошибка.+Запустите+sudo+./install.sh+update", status_code=302)
+
+
+@app.post("/settings/save_all")
+async def settings_save_all(
+    request: Request,
+    _: str = Depends(verify_admin),
+):
+    """Сохранить все параметры из формы"""
+    form = await request.form()
+    keys = form.getlist("key")
+    values = form.getlist("value")
+    secret_keys = ("TOKEN", "PASSWORD", "SECRET", "KEY")
+    saved = 0
+    skipped = 0
+    for key, value in zip(keys, values):
+        if not key:
+            continue
+        is_secret = any(s in key.upper() for s in secret_keys)
+        if is_secret and not str(value).strip():
+            skipped += 1
+            continue
+        save_env_var(key, str(value))
+        saved += 1
+    msg = f"Сохранено: {saved}." + (f" Пропущено (пустые секреты): {skipped}." if skipped else "")
+    return RedirectResponse(url=f"/settings?msg={msg.replace(' ', '+')}", status_code=302)
 
 
 @app.post("/settings/save")
@@ -309,12 +349,13 @@ async def settings_save(
     value: str = Form(""),
     _: str = Depends(verify_admin),
 ):
+    """Сохранение одного параметра (fallback)"""
     secret_keys = ("TOKEN", "PASSWORD", "SECRET", "KEY")
     is_secret = any(s in key.upper() for s in secret_keys)
     if is_secret and not value.strip():
         return RedirectResponse(url="/settings?msg=Пропущено+(пустое+значение+для+секрета).", status_code=302)
     save_env_var(key, value)
-    return RedirectResponse(url=f"/settings?msg=Сохранено.+Нажмите+%C2%ABПерезапустить+сервис%C2%BB.", status_code=302)
+    return RedirectResponse(url=f"/settings?msg=Сохранено.", status_code=302)
 
 
 def run_admin_panel(

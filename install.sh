@@ -119,6 +119,12 @@ print('  БД в порядке')
         echo "  Добавлено REMNAWAVE_API_TOKEN= в $REMNAWAVE_DIR/.env — заполните и перезапустите Subscription Page"
     fi
 
+    # Разрешить перезапуск из админ-панели (если ещё нет)
+    if [ ! -f /etc/sudoers.d/vpn-bot-restart ]; then
+        echo "$BOT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart $SERVICE_NAME" > /etc/sudoers.d/vpn-bot-restart
+        chmod 440 /etc/sudoers.d/vpn-bot-restart
+    fi
+
     chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
     echo "[4/4] Перезапуск сервиса..."
     systemctl restart "$SERVICE_NAME"
@@ -524,6 +530,10 @@ EOF
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
 echo "  Сервис включён"
+
+# Разрешить vpnbot перезапускать сервис без пароля (для кнопки в админ-панели)
+echo "$BOT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart $SERVICE_NAME" > /etc/sudoers.d/vpn-bot-restart
+chmod 440 /etc/sudoers.d/vpn-bot-restart
 
 # 11. Cron
 echo "[9/10] Cron и завершение..."
