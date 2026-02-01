@@ -189,9 +189,9 @@ NGINXSUBEOF
     nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
 
     # Обновить .env бота (если ещё не создан, будет ниже)
+    # API — всегда localhost (бот и панель на одном сервере, без зависимости от DNS)
     REMNAWAVE_API_URL="http://127.0.0.1:$PANEL_PORT"
     REMNAWAVE_SUB_URL="http://127.0.0.1:$SUB_PORT"
-    [ -n "$PANEL_DOMAIN" ] && REMNAWAVE_API_URL="https://$PANEL_DOMAIN"
     [ -n "$SUB_DOMAIN" ] && REMNAWAVE_SUB_URL="https://$SUB_DOMAIN"
 fi
 
