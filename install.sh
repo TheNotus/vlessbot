@@ -6,6 +6,13 @@
 
 set -e
 
+# Цвета
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
 REPO_URL="${VPN_BOT_REPO:-https://github.com/TheNotus/vlessbot.git}"
 REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
 REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-true}"
@@ -40,6 +47,28 @@ echo "  VPN Bot — Полная установка"
 echo "=========================================="
 echo ""
 echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
+echo ""
+
+# Запрос доменов (если не заданы переменными)
+# </dev/tty — чтобы read работал при curl | bash (stdin иначе занят pipe)
+if [ -z "$WEBHOOK_DOMAIN" ] || [ "$WEBHOOK_DOMAIN" = "bot.example.com" ]; then
+    echo -e "${CYAN}Введите домен для webhook бота (например bot.example.com):${NC}"
+    echo -e "  DNS должен указывать на IP этого сервера."
+    read -r -p "Домен: " WEBHOOK_DOMAIN </dev/tty
+    WEBHOOK_DOMAIN="${WEBHOOK_DOMAIN:-bot.example.com}"
+    if [ "$WEBHOOK_DOMAIN" = "bot.example.com" ]; then
+        echo -e "  ${YELLOW}Используется bot.example.com — замените вручную в nginx и .env${NC}"
+    fi
+fi
+if [ -z "$CERTBOT_EMAIL" ]; then
+    read -r -p "Email для SSL (Let's Encrypt) или Enter чтобы пропустить: " CERTBOT_EMAIL </dev/tty
+fi
+if [ -z "$PANEL_DOMAIN" ] && [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+    read -r -p "Домен для Remnawave Panel (Enter — только по IP): " PANEL_DOMAIN </dev/tty
+fi
+if [ -z "$SUB_DOMAIN" ] && [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+    read -r -p "Домен для Subscription Page (Enter — только по IP): " SUB_DOMAIN </dev/tty
+fi
 echo ""
 
 # 1. Обновление системы
@@ -227,10 +256,9 @@ fi
 chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
 
 # 8. Nginx (webhook бота)
+echo ""
 echo "[7/10] Настройка nginx..."
-WEBHOOK_DOMAIN="${WEBHOOK_DOMAIN:-bot.example.com}"
 WEBHOOK_PORT="${WEBHOOK_PORT:-8000}"
-CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 cat > /etc/nginx/sites-available/vpn-bot << NGINXEOF
 server {
     listen 80;
@@ -277,7 +305,7 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && [ -f "$INSTALL_DIR/.env" ]; then
     [ -n "$REMNAWAVE_SUB_URL" ] && (grep -q "^REMNAWAVE_SUBSCRIPTION_URL=" "$INSTALL_DIR/.env" && sed -i "s|^REMNAWAVE_SUBSCRIPTION_URL=.*|REMNAWAVE_SUBSCRIPTION_URL=$REMNAWAVE_SUB_URL|" "$INSTALL_DIR/.env" || echo "REMNAWAVE_SUBSCRIPTION_URL=$REMNAWAVE_SUB_URL" >> "$INSTALL_DIR/.env")
 fi
 
-# 9. Systemd
+# 10. Systemd
 echo "[8/10] Настройка systemd..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
@@ -307,7 +335,7 @@ systemctl daemon-reload
 systemctl enable $SERVICE_NAME
 echo "  Сервис включён"
 
-# 10. Cron
+# 11. Cron
 echo "[9/10] Cron и завершение..."
 CRON_CMD="0 4 * * * $BOT_USER cd $INSTALL_DIR && $INSTALL_DIR/venv/bin/python cleanup_expired.py >> $LOG_DIR/cleanup.log 2>&1"
 (crontab -l -u $BOT_USER 2>/dev/null | grep -v "cleanup_expired.py" || true; echo "$CRON_CMD") | crontab -u $BOT_USER -
@@ -330,37 +358,36 @@ echo "  Запуск сервиса..."
 systemctl start $SERVICE_NAME 2>/dev/null || true
 
 echo ""
-echo "=========================================="
-echo "  Установка завершена!"
-echo "=========================================="
+echo -e "\n${GREEN}=====================================================${NC}"
+echo -e "${GREEN}      🎉 Установка успешно завершена! 🎉      ${NC}"
+echo -e "${GREEN}=====================================================${NC}"
 echo ""
-echo "Автоматически выполнено:"
-echo "  - Nginx: $WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
-[ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && echo "  - Remnawave Panel: $REMNAWAVE_DIR (порты $PANEL_PORT, $SUB_PORT)"
-[ -n "$PANEL_DOMAIN" ] && echo "  - Panel: https://$PANEL_DOMAIN"
-[ -n "$SUB_DOMAIN" ] && echo "  - Subscription: https://$SUB_DOMAIN"
-[ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && echo "  - .env: WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN"
-[ -n "$CERTBOT_EMAIL" ] && [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && echo "  - SSL: certbot"
-echo "  - Сервис vpn-bot запущен"
+echo -e "Webhook бота доступен по адресу:"
+echo -e "  - ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
 echo ""
-echo "Сделайте вручную:"
-echo "  1. Отредактируйте .env (токены, пароли, REMNAWAVE_*):"
-echo "     sudo nano $INSTALL_DIR/.env"
+echo -e "${RED}ПЕРВЫЕ ШАГИ:${NC}"
+echo -e "1. Отредактируйте .env — токены, пароли, REMNAWAVE_*:"
+echo -e "   ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"
+echo ""
+echo -e "2. В YooKassa укажите URL уведомлений:"
+echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
 echo ""
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
-echo "  2. Remnawave Panel:"
-echo "     - Откройте ${PANEL_DOMAIN:-http://IP:$PANEL_PORT} и создайте админа"
-echo "     - Добавьте Node (VPN-сервер), Internal Squad"
-echo "     - Settings -> API Tokens -> создайте токен"
-echo "     - Добавьте токен в $REMNAWAVE_DIR/.env (REMNAWAVE_API_TOKEN)"
-echo "     - cd $REMNAWAVE_DIR && docker compose restart subscription-page"
+echo -e "3. Remnawave Panel:"
+if [ -n "$PANEL_DOMAIN" ]; then
+echo -e "   - Панель: ${YELLOW}https://${PANEL_DOMAIN}${NC}"
+else
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+echo -e "   - Панель: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
+fi
+echo -e "   - Создайте админа, добавьте Node, Internal Squad"
+echo -e "   - Settings -> API Tokens -> создайте токен"
+echo -e "   - Добавьте токен в $REMNAWAVE_DIR/.env (REMNAWAVE_API_TOKEN)"
+echo -e "   - ${CYAN}cd $REMNAWAVE_DIR && docker compose restart subscription-page${NC}"
 echo ""
 fi
-echo "  3. В Yookassa укажите URL уведомлений:"
-echo "     https://$WEBHOOK_DOMAIN/webhook/yookassa"
+echo -e "Логи бота: ${CYAN}sudo journalctl -u $SERVICE_NAME -f${NC}"
 echo ""
-echo "Логи: sudo journalctl -u $SERVICE_NAME -f"
-echo ""
-echo "Админ-панель (ADMIN_PANEL_ENABLED=true):"
-echo "  ssh -L 8080:127.0.0.1:8080 user@server -> http://127.0.0.1:8080"
+echo -e "Админ-панель (ADMIN_PANEL_ENABLED=true):"
+echo -e "  ${CYAN}ssh -L 8080:127.0.0.1:8080 user@server${NC} → http://127.0.0.1:8080"
 echo ""
