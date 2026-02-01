@@ -97,7 +97,7 @@ apt-get install -y \
     certbot \
     python3-certbot-nginx
 
-# 2b. Установка Remnawave Panel (Docker + Panel + Subscription Page)
+# 2b. Установка Remnawave Panel (официальный remnawave/backend + Subscription Page)
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
     echo "[2b/10] Установка Remnawave Panel..."
     if ! command -v docker &>/dev/null; then
@@ -112,50 +112,76 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
         systemctl start docker
     fi
     mkdir -p "$REMNAWAVE_DIR"
-    # Subscription page вызывает API панели — при одном хосте используем internal URL
-    PANEL_URL_FOR_SUB="http://panel:3000"
-    cat > "$REMNAWAVE_DIR/docker-compose.yml" << REMNAWAVEEOF
-services:
-  panel:
-    image: remnawave/panel:latest
-    container_name: remnawave-panel
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${PANEL_PORT}:3000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - NODE_ENV=production
-
-  subscription-page:
-    image: remnawave/subscription-page:latest
-    container_name: remnawave-subscription
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${SUB_PORT}:3000"
-    environment:
-      - REMNAWAVE_PANEL_URL=${PANEL_URL_FOR_SUB}
-      - REMNAWAVE_API_TOKEN=\${REMNAWAVE_API_TOKEN:-}
-    depends_on:
-      - panel
-REMNAWAVEEOF
-    cat > "$REMNAWAVE_DIR/.env" << REMNAWAVEENV
-# Добавьте API токен после создания в панели: Settings -> API Tokens
-REMNAWAVE_API_TOKEN=
-REMNAWAVEENV
     cd "$REMNAWAVE_DIR"
-    docker compose pull 2>/dev/null || docker-compose pull 2>/dev/null || true
-    docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true
-    sleep 4
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-panel$'; then
-        echo "  ⚠ Контейнер remnawave-panel не запущен, повторный запуск..."
-        (cd "$REMNAWAVE_DIR" && docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true)
-        sleep 3
+
+    echo "  Скачивание официальных файлов Remnawave..."
+    curl -fsSL -o docker-compose-prod.yml "https://raw.githubusercontent.com/remnawave/backend/main/docker-compose-prod.yml"
+    curl -fsSL -o .env "https://raw.githubusercontent.com/remnawave/backend/main/.env.sample"
+
+    # Генерация секретов
+    JWT_AUTH=$(openssl rand -hex 64)
+    JWT_API=$(openssl rand -hex 64)
+    PG_PASS=$(openssl rand -hex 24)
+    METRICS_PASS=$(openssl rand -hex 16)
+    WEBHOOK_SECRET=$(openssl rand -hex 32)
+
+    sed -i "s|^JWT_AUTH_SECRET=.*|JWT_AUTH_SECRET=$JWT_AUTH|" .env
+    sed -i "s|^JWT_API_TOKENS_SECRET=.*|JWT_API_TOKENS_SECRET=$JWT_API|" .env
+    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$PG_PASS|" .env
+    sed -i "s|^METRICS_PASS=.*|METRICS_PASS=$METRICS_PASS|" .env
+    sed -i "s|^WEBHOOK_SECRET_HEADER=.*|WEBHOOK_SECRET_HEADER=$WEBHOOK_SECRET|" .env
+    sed -i "s|postgresql://postgres:[^@]*@|postgresql://postgres:$PG_PASS@|" .env
+
+    # Домены (без http/https, без / в конце)
+    FRONT_DOMAIN="${PANEL_DOMAIN:-*}"
+    SUB_PUBLIC="${SUB_DOMAIN:-${PANEL_DOMAIN:-panel.local}}"
+    sed -i "s|^FRONT_END_DOMAIN=.*|FRONT_END_DOMAIN=$FRONT_DOMAIN|" .env
+    sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=$SUB_PUBLIC|" .env
+
+    # Порт панели: host PANEL_PORT -> container 3000
+    sed -i "s|- 127.0.0.1:3000:\${APP_PORT:-3000}|- 127.0.0.1:${PANEL_PORT}:3000|" docker-compose-prod.yml
+
+    # Subscription Page (merge с основным compose)
+    cat > docker-compose-sub.yml << REMNAWAVESUB
+services:
+  remnawave-subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    hostname: remnawave-subscription-page
+    restart: always
+    env_file: .env
+    environment:
+      - APP_PORT=3010
+      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - REMNAWAVE_API_TOKEN=\${REMNAWAVE_API_TOKEN:-}
+    ports:
+      - "127.0.0.1:${SUB_PORT}:3010"
+    networks:
+      - remnawave-network
+    depends_on:
+      remnawave:
+        condition: service_healthy
+REMNAWAVESUB
+
+    # Пустой REMNAWAVE_API_TOKEN (добавить после создания в панели)
+    grep -q "^REMNAWAVE_API_TOKEN=" .env || echo "REMNAWAVE_API_TOKEN=" >> .env
+
+    # Остановить старые контейнеры (если была установка с remnawave/panel)
+    docker stop remnawave-panel remnawave-subscription 2>/dev/null || true
+    docker rm remnawave-panel remnawave-subscription 2>/dev/null || true
+
+    echo "  Запуск контейнеров Remnawave..."
+    docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
+    sleep 8
+    if ! docker ps --format '{{.Names}}' | grep -q '^remnawave$'; then
+        echo "  ⚠ Контейнер remnawave не запущен, повторный запуск..."
+        docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
+        sleep 5
     fi
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-panel$'; then
+    if docker ps --format '{{.Names}}' | grep -q '^remnawave$'; then
         echo "  Remnawave Panel: http://127.0.0.1:$PANEL_PORT (nginx ниже)"
     else
-        echo "  ⚠ Remnawave Panel: контейнер не запущен. После установки: cd $REMNAWAVE_DIR && sudo docker compose up -d"
+        echo "  ⚠ Remnawave Panel: контейнер не запущен. Проверьте: cd $REMNAWAVE_DIR && sudo docker compose -f docker-compose-prod.yml logs -f"
     fi
     echo "  Subscription Page: http://127.0.0.1:$SUB_PORT"
 
@@ -427,7 +453,7 @@ echo -e "   • Добавьте Node (VPN-сервер), создайте Inter
 echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
 echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
 echo -e "     (строка REMNAWAVE_API_TOKEN=). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
-echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo docker compose restart subscription-page${NC}"
+echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml restart remnawave-subscription-page${NC}"
 echo ""
 echo -e "${CYAN}Шаг 2. Файл настроек бота (.env)${NC}"
 echo -e "   Откройте: ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"

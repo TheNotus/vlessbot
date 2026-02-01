@@ -39,44 +39,43 @@ sudo usermod -aG docker $USER
 # Перелогиньтесь или выполните: newgrp docker
 ```
 
-### 2.2. Создание директории и docker-compose
+### 2.2. Установка Remnawave Panel (официальная)
+
+Remnawave Panel использует образ `remnawave/backend` (не `remnawave/panel` — его не существует).
 
 ```bash
-mkdir -p ~/remnawave
-cd ~/remnawave
+mkdir -p /opt/remnawave
+cd /opt/remnawave
+curl -o docker-compose-prod.yml https://raw.githubusercontent.com/remnawave/backend/main/docker-compose-prod.yml
+curl -o .env https://raw.githubusercontent.com/remnawave/backend/main/.env.sample
 ```
 
-Создайте файл `docker-compose.yml`:
-
-```yaml
-version: "3.8"
-services:
-  panel:
-    image: remnawave/panel:latest
-    restart: unless-stopped
-    ports:
-      - "8080:3000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - NODE_ENV=production
-```
-
-### 2.3. Запуск панели
+Сгенерируйте секреты и пароль Postgres:
 
 ```bash
-docker compose up -d
+sed -i "s|^JWT_AUTH_SECRET=.*|JWT_AUTH_SECRET=$(openssl rand -hex 64)|" .env
+sed -i "s|^JWT_API_TOKENS_SECRET=.*|JWT_API_TOKENS_SECRET=$(openssl rand -hex 64)|" .env
+pw=$(openssl rand -hex 24) && sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pw|" .env
+sed -i "s|postgresql://postgres:[^@]*@|postgresql://postgres:$pw@|" .env
+```
+
+Отредактируйте `.env`: `FRONT_END_DOMAIN`, `SUB_PUBLIC_DOMAIN`. Затем:
+
+```bash
+# Порт 8080 для панели (по умолчанию 3000)
+sed -i 's|- 127.0.0.1:3000:\${APP_PORT:-3000}|- 127.0.0.1:8080:3000|' docker-compose-prod.yml
+docker compose -f docker-compose-prod.yml up -d
 ```
 
 Панель будет доступна по `http://ваш-ip:8080`.
 
-### 2.4. Первоначальная настройка
+### 2.3. Первоначальная настройка
 
 1. Откройте в браузере `http://ваш-ip:8080`
 2. Создайте учётную запись администратора (username и password)
 3. Сохраните эти данные — они понадобятся для `REMNAWAVE_USERNAME` и `REMNAWAVE_PASSWORD`
 
-### 2.5. Настройка Nginx (рекомендуется)
+### 2.4. Настройка Nginx (рекомендуется)
 
 Для работы по HTTPS и на домене настройте Nginx:
 
@@ -469,7 +468,7 @@ REFERRAL_DAYS=7
 | Webhook не вызывается | Проверьте доступность URL из интернета, HTTPS, настройки Yookassa |
 | Подписка не приходит | Проверьте логи бота и webhook, настройки Yookassa webhook |
 | Реферальные дни не начисляются | Реферер должен иметь активного пользователя в Remnawave (купленную подписку) |
-| **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave-panel`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose up -d` |
+| **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d` |
 | certbot / nginx: «No such file or directory» | Удалите битую симлинку в `sites-enabled`: `sudo rm /etc/nginx/sites-enabled/имя_файла.conf`, затем `sudo nginx -t` |
 
 ---
