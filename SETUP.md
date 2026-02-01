@@ -468,7 +468,7 @@ REFERRAL_DAYS=7
 | Webhook не вызывается | Проверьте доступность URL из интернета, HTTPS, настройки Yookassa |
 | Подписка не приходит | Проверьте логи бота и webhook, настройки Yookassa webhook |
 | Реферальные дни не начисляются | Реферер должен иметь активного пользователя в Remnawave (купленную подписку) |
-| **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d` |
+| **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d` (или `docker-compose` вместо `docker compose`) |
 | certbot / nginx: «No such file or directory» | Удалите битую симлинку в `sites-enabled`: `sudo rm /etc/nginx/sites-enabled/имя_файла.conf`, затем `sudo nginx -t` |
 
 ---

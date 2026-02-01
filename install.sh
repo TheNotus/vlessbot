@@ -99,6 +99,14 @@ apt-get install -y \
 
 # 2b. Установка Remnawave Panel (официальный remnawave/backend + Subscription Page)
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
+    # Определить команду: docker compose (v2) или docker-compose (v1/standalone)
+    if docker compose version &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker compose"
+    elif command -v docker-compose &>/dev/null && docker-compose version &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker-compose"
+    else
+        DOCKER_COMPOSE_CMD="docker-compose"
+    fi
     echo "[2b/10] Установка Remnawave Panel..."
     if ! command -v docker &>/dev/null; then
         echo "  Установка Docker..."
@@ -171,17 +179,17 @@ REMNAWAVESUB
     docker rm remnawave-panel remnawave-subscription 2>/dev/null || true
 
     echo "  Запуск контейнеров Remnawave..."
-    docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
+    $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
     sleep 8
     if ! docker ps --format '{{.Names}}' | grep -q '^remnawave$'; then
         echo "  ⚠ Контейнер remnawave не запущен, повторный запуск..."
-        docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
+        $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
         sleep 5
     fi
     if docker ps --format '{{.Names}}' | grep -q '^remnawave$'; then
         echo "  Remnawave Panel: http://127.0.0.1:$PANEL_PORT (nginx ниже)"
     else
-        echo "  ⚠ Remnawave Panel: контейнер не запущен. Проверьте: cd $REMNAWAVE_DIR && sudo docker compose -f docker-compose-prod.yml logs -f"
+        echo "  ⚠ Remnawave Panel: контейнер не запущен. Проверьте: cd $REMNAWAVE_DIR && sudo $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml logs -f"
     fi
     echo "  Subscription Page: http://127.0.0.1:$SUB_PORT"
 
@@ -453,7 +461,7 @@ echo -e "   • Добавьте Node (VPN-сервер), создайте Inter
 echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
 echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
 echo -e "     (строка REMNAWAVE_API_TOKEN=). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
-echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml restart remnawave-subscription-page${NC}"
+echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml restart remnawave-subscription-page${NC}"
 echo ""
 echo -e "${CYAN}Шаг 2. Файл настроек бота (.env)${NC}"
 echo -e "   Откройте: ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"

@@ -104,6 +104,7 @@ Webhook слушает на `127.0.0.1:8000`. Nginx проксирует зап�
 Проверьте, что контейнер запущен: `docker ps` (должен быть `remnawave`), и порт: `ss -tlnp | grep 8080`. Если контейнера нет:
 ```bash
 cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d
+# Если docker compose не найден — используйте: docker-compose -f ... -f ... up -d
 ```
 
 ## Структура проекта
