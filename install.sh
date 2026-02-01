@@ -5,6 +5,7 @@
 # С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.example.com (опционально)
 
 set -e
+# Ошибки и вывод команд установки показываются в консоли (без -qq и скрытия stderr)
 
 # Цвета
 RED='\033[0;31m'
@@ -31,6 +32,9 @@ if [ "$EUID" -ne 0 ]; then
     echo "Или: curl -sSL .../install.sh | sudo bash"
     exit 1
 fi
+
+# Рабочая директория — всегда корень (избегаем getcwd: cannot access parent directories при запуске из удалённой/недоступной папки)
+cd /
 
 INSTALL_DIR="${VPN_BOT_INSTALL_DIR:-/opt/vpn-bot}"
 BOT_USER="${VPN_BOT_USER:-vpnbot}"
@@ -74,12 +78,12 @@ echo ""
 # 1. Обновление системы
 echo "[1/10] Обновление системы..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get upgrade -y -qq
+apt-get update
+apt-get upgrade -y
 
 # 2. Установка зависимостей
 echo "[2/10] Установка Python, nginx и зависимостей..."
-apt-get install -y -qq \
+apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
@@ -103,7 +107,7 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
         systemctl start docker
     fi
     if ! command -v docker &>/dev/null; then
-        apt-get install -y -qq docker.io docker-compose-v2
+        apt-get install -y docker.io docker-compose-v2
         systemctl enable docker
         systemctl start docker
     fi
@@ -140,7 +144,7 @@ REMNAWAVEEOF
 REMNAWAVE_API_TOKEN=
 REMNAWAVEENV
     cd "$REMNAWAVE_DIR"
-    docker compose pull -q 2>/dev/null || docker-compose pull -q 2>/dev/null || true
+    docker compose pull 2>/dev/null || docker-compose pull 2>/dev/null || true
     docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true
     sleep 4
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-panel$'; then
@@ -174,7 +178,7 @@ server {
 }
 NGINXPANELEOF
         ln -sf /etc/nginx/sites-available/remnawave-panel /etc/nginx/sites-enabled/ 2>/dev/null || true
-        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$PANEL_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null || true
+        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$PANEL_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" || true
         echo "  Panel: https://$PANEL_DOMAIN"
     fi
     if [ -n "$SUB_DOMAIN" ]; then
@@ -193,10 +197,10 @@ server {
 }
 NGINXSUBEOF
         ln -sf /etc/nginx/sites-available/remnawave-sub /etc/nginx/sites-enabled/ 2>/dev/null || true
-        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$SUB_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null || true
+        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$SUB_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" || true
         echo "  Subscription: https://$SUB_DOMAIN"
     fi
-    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+    nginx -t && systemctl reload nginx || true
 
     # Обновить .env бота (если ещё не создан, будет ниже)
     # API — всегда localhost (бот и панель на одном сервере, без зависимости от DNS)
@@ -204,15 +208,16 @@ NGINXSUBEOF
     REMNAWAVE_SUB_URL="http://127.0.0.1:$SUB_PORT"
     [ -n "$SUB_DOMAIN" ] && REMNAWAVE_SUB_URL="https://$SUB_DOMAIN"
 fi
+cd /
 
 # 3. Python 3.10+
 echo "[3/10] Проверка Python..."
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0")
 if [[ "$(printf '%s\n' "3.10" "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10" ]] && [[ "$PYTHON_VERSION" != "0" ]]; then
     echo "  Добавление PPA для Python 3.10..."
-    add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-    apt-get update -qq
-    apt-get install -y -qq python3.10 python3.10-venv python3.10-dev
+    add-apt-repository -y ppa:deadsnakes/ppa || true
+    apt-get update
+    apt-get install -y python3.10 python3.10-venv python3.10-dev
     PYTHON_CMD=python3.10
 else
     PYTHON_CMD=python3
@@ -246,8 +251,8 @@ echo "[6/10] Установка Python-зависимостей..."
 cd "$INSTALL_DIR"
 $PYTHON_CMD -m venv venv
 source venv/bin/activate
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+pip install --upgrade pip
+pip install -r requirements.txt
 echo "  Зависимости установлены"
 
 $PYTHON_CMD -c "
@@ -255,7 +260,7 @@ import asyncio
 from database import Database
 asyncio.run(Database().init())
 print('  БД инициализирована')
-" 2>/dev/null || echo "  (БД при первом запуске)"
+" || echo "  (БД при первом запуске — проверьте логи выше)"
 
 # 7. .env
 if [ ! -f "$INSTALL_DIR/.env" ]; then
@@ -315,7 +320,7 @@ server {
 NGINXEOF
 ln -sf /etc/nginx/sites-available/vpn-bot /etc/nginx/sites-enabled/ 2>/dev/null || true
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || echo "  Nginx: отредактируйте /etc/nginx/sites-available/vpn-bot (server_name)"
+nginx -t && systemctl reload nginx || echo "  Nginx: отредактируйте /etc/nginx/sites-available/vpn-bot (server_name) и выполните: sudo nginx -t"
 echo "  Nginx: server_name=$WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
 
 # Обновить .env: WEBHOOK_BASE_URL
@@ -332,7 +337,7 @@ fi
 # Certbot SSL (автоматически, если заданы WEBHOOK_DOMAIN и CERTBOT_EMAIL)
 if [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && [ -n "$CERTBOT_EMAIL" ]; then
     echo "  Запуск certbot для $WEBHOOK_DOMAIN..."
-    if certbot --nginx -d "$WEBHOOK_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" 2>/dev/null; then
+    if certbot --nginx -d "$WEBHOOK_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL"; then
         echo "  SSL: сертификат получен"
     else
         echo "  SSL: не удалось (проверьте DNS: $WEBHOOK_DOMAIN -> IP сервера)"
@@ -395,7 +400,7 @@ EOF
 
 # Автозапуск сервиса
 echo "  Запуск сервиса..."
-systemctl start $SERVICE_NAME 2>/dev/null || true
+systemctl start $SERVICE_NAME || true
 
 echo ""
 echo -e "\n${GREEN}=====================================================${NC}"
