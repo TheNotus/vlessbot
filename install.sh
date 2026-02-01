@@ -111,6 +111,14 @@ asyncio.run(Database().init())
 print('  БД в порядке')
 " 2>/dev/null || echo "  (БД — проверьте вручную)"
 
+    # Добавить REMNAWAVE_API_TOKEN в /opt/remnawave/.env если отсутствует (для Subscription Page)
+    if [ -f "$REMNAWAVE_DIR/.env" ] && ! grep -q "^REMNAWAVE_API_TOKEN=" "$REMNAWAVE_DIR/.env" 2>/dev/null; then
+        echo "" >> "$REMNAWAVE_DIR/.env"
+        echo "# Subscription Page: токен из Remnawave Panel → Settings → API Tokens" >> "$REMNAWAVE_DIR/.env"
+        echo "REMNAWAVE_API_TOKEN=" >> "$REMNAWAVE_DIR/.env"
+        echo "  Добавлено REMNAWAVE_API_TOKEN= в $REMNAWAVE_DIR/.env — заполните и перезапустите Subscription Page"
+    fi
+
     chown -R "$BOT_USER:$BOT_USER" "$INSTALL_DIR"
     echo "[4/4] Перезапуск сервиса..."
     systemctl restart "$SERVICE_NAME"
@@ -264,8 +272,14 @@ services:
         condition: service_healthy
 REMNAWAVESUB
 
-    # Пустой REMNAWAVE_API_TOKEN (добавить после создания в панели)
-    grep -q "^REMNAWAVE_API_TOKEN=" .env || echo "REMNAWAVE_API_TOKEN=" >> .env
+    # REMNAWAVE_API_TOKEN — обязательно для Subscription Page. Панель → Settings → API Tokens
+    if grep -q "^REMNAWAVE_API_TOKEN=" .env 2>/dev/null; then
+        :  # уже есть
+    else
+        echo "" >> .env
+        echo "# Subscription Page: токен из Remnawave Panel → Settings → API Tokens" >> .env
+        echo "REMNAWAVE_API_TOKEN=" >> .env
+    fi
 
     # Остановить старые контейнеры (если была установка с remnawave/panel)
     docker stop remnawave-panel remnawave-subscription 2>/dev/null || true
