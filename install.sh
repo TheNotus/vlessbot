@@ -802,9 +802,8 @@ COMPOSENODEEOF
         ufw allow from 172.30.0.0/16 to any port 2222 proto tcp 2>/dev/null || true
         ufw reload 2>/dev/null || true
 
-        echo -e "${GREEN}  Нода (remnanode) и nginx на сокете запущены.${NC}"
-        echo -e "  Панель по ссылке с секретом: ${YELLOW}https://${PANEL_DOMAIN}/auth/login?${COOKIES_R1}=${COOKIES_R2}${NC}"
-        echo -e "  Логин: $SUPERADMIN_USER  Пароль: $SUPERADMIN_PASS"
+        echo ""
+        echo -e "${GREEN}  Нода (remnanode) и nginx на сокете запущены.${NC} Ссылка на панель и учётные данные — в конце установки."
         echo ""
         fi
     fi
@@ -1035,13 +1034,22 @@ echo ""
 
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
 echo -e "${CYAN}Шаг 1. Remnawave Panel (панель VPN)${NC}"
-if [ -n "$PANEL_DOMAIN" ]; then
+if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ -n "$PANEL_DOMAIN" ] && [ -n "$COOKIES_R1" ] && [ -n "$COOKIES_R2" ]; then
+echo -e "   Панель по ссылке с секретом (сохраните):"
+echo -e "   ${YELLOW}https://${PANEL_DOMAIN}/auth/login?${COOKIES_R1}=${COOKIES_R2}${NC}"
+if [ -n "$SUPERADMIN_USER" ] && [ -n "$SUPERADMIN_PASS" ]; then
+echo -e "   Логин:  ${CYAN}${SUPERADMIN_USER}${NC}"
+echo -e "   Пароль: ${CYAN}${SUPERADMIN_PASS}${NC}"
+else
+echo -e "   Логин и пароль — учётные данные, созданные при первом входе в панель."
+fi
+elif [ -n "$PANEL_DOMAIN" ]; then
 echo -e "   Откройте в браузере: ${YELLOW}https://${PANEL_DOMAIN}${NC}"
 else
 SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo -e "   Откройте в браузере: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
 fi
-echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
+[ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
 [ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && echo -e "   • Нода и заглушка SelfSteal: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (уже установлены скриптом)"
 [ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • SelfSteal домен для ноды: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (ноду настройте скриптом remnawave-reverse-proxy)"
 echo -e "   • Создайте Internal Squad (группу подписок) и привяжите ноду, если ещё не сделано"
