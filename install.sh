@@ -650,6 +650,7 @@ services:
       - /dev/shm:/dev/shm:rw
       - /var/www/html:/var/www/html:ro
       - /etc/letsencrypt/live:/etc/nginx/ssl/live:ro
+      - /etc/letsencrypt/archive:/etc/nginx/ssl/archive:ro
     command: sh -c 'rm -f /dev/shm/nginx.sock && exec nginx -g "daemon off;"'
 
   remnanode:

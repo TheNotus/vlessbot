@@ -86,7 +86,6 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         """Загрузка из переменных окружения"""
-        import os
         from dotenv import load_dotenv
         load_dotenv()
 

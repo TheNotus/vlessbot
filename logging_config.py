@@ -2,9 +2,10 @@
 import logging
 import os
 import sys
+from typing import Optional
 
 
-def setup_logging(log_dir: str = None) -> None:
+def setup_logging(log_dir: Optional[str] = None) -> None:
     """
     Настроить логирование в файл и консоль.
     log_dir или VPN_BOT_LOG_DIR, по умолчанию ./logs

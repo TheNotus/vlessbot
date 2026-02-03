@@ -97,6 +97,53 @@ def save_env_var(key: str, value: str) -> bool:
 
 app = FastAPI(title="VPN Bot Admin", docs_url=None, redoc_url=None)
 
+
+def _auth_error_html(message: str, status: int = 401) -> str:
+    """HTML-страница при ошибке входа с кнопкой «Ввести пароль снова»"""
+    return f"""
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ошибка входа</title>
+<style>
+*{{box-sizing:border-box}}
+body{{font-family:system-ui,sans-serif;margin:0;background:#0f0f14;color:#e6e6ea;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}}
+.card{{background:#16161d;border:1px solid #2a2a35;border-radius:8px;padding:2rem;max-width:420px;text-align:center}}
+h1{{font-size:1.25rem;margin:0 0 1rem;color:#e74c3c}}
+p{{color:#8a8a96;margin:0 0 1.5rem;line-height:1.5}}
+a{{display:inline-block;padding:0.75rem 1.5rem;background:#00d4aa;color:#0f0f14;border-radius:6px;text-decoration:none;font-weight:500}}
+a:hover{{background:#00b894}}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>{html.escape(message)}</h1>
+<p>Нажмите кнопку ниже — браузер снова запросит логин и пароль.</p>
+<a href="/">Ввести пароль снова</a>
+</div>
+</body>
+</html>
+"""
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """При 401/503 возвращаем HTML вместо JSON, чтобы не показывать сырой JSON."""
+    if exc.status_code == 401:
+        detail = exc.detail if isinstance(exc.detail, str) else "Неверный пароль"
+        return HTMLResponse(
+            content=_auth_error_html(detail, 401),
+            status_code=401,
+            headers={"WWW-Authenticate": "Basic realm=\"VPN Bot Admin\", charset=\"UTF-8\""},
+        )
+    if exc.status_code == 503:
+        detail = exc.detail if isinstance(exc.detail, str) else "Сервис недоступен"
+        return HTMLResponse(
+            content=_auth_error_html(detail, 503),
+            status_code=503,
+        )
+    raise exc
+
+
 BASE_HTML = """
 <!DOCTYPE html>
 <html lang="ru">
