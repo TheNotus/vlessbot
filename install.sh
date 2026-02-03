@@ -151,7 +151,7 @@ echo ""
 if [ -z "$REMNAWAVE_PANEL_INSTALL" ]; then
     echo -e "${CYAN}Установить Remnawave на этот сервер?${NC}"
     echo "  1) Нет — только VPN Bot"
-    echo "  2) Панель и нода на одном сервере (панель ставим здесь; ноду настраивают в панели или по инструкции)"
+    echo "  2) Панель и нода на одном сервере (панель + Xray-нода + заглушка SelfSteal)"
     echo "  3) Только панель Remnawave"
     echo "  4) Только нода Remnawave (бот не ставим; ноду ставьте скриптом remnawave-reverse-proxy)"
     read -r -p "Выбор (1–4) [1]: " REMNAWAVE_CHOICE </dev/tty
@@ -231,7 +231,77 @@ apt-get install -y \
     rsync \
     nginx \
     certbot \
-    python3-certbot-nginx
+    python3-certbot-nginx \
+    unzip \
+    jq
+
+# Установка заглушки для SelfSteal (как в remnawave-reverse-proxy: simple/sni/nothing)
+install_selfsteal_template() {
+    [ -n "$SELFSTEAL_DOMAIN" ] || return 0
+    [ -d /var/www/html ] || mkdir -p /var/www/html
+    echo ""
+    echo -e "${CYAN}Заглушка для SelfSteal ($SELFSTEAL_DOMAIN):${NC}"
+    echo "  1) Simple web templates (eGamesAPI)"
+    echo "  2) SNI templates (distillium)"
+    echo "  3) Nothing Sni templates (prettyleaf)"
+    echo "  0) Пропустить (минимальная страница)"
+    read -r -p "Выбор (0–3) [1]: " TPL_CHOICE </dev/tty
+    TPL_CHOICE="${TPL_CHOICE:-1}"
+    case "$TPL_CHOICE" in
+        0) echo "<!DOCTYPE html><html><head><meta charset=utf-8><title>Site</title></head><body><p>Welcome.</p></body></html>" > /var/www/html/index.html; echo "  Установлена минимальная страница."; return 0 ;;
+        1) TPL_URL="https://github.com/eGamesAPI/simple-web-templates/archive/refs/heads/main.zip"; TPL_DIR="simple-web-templates-main" ;;
+        2) TPL_URL="https://github.com/distillium/sni-templates/archive/refs/heads/main.zip"; TPL_DIR="sni-templates-main" ;;
+        3) TPL_URL="https://github.com/prettyleaf/nothing-sni/archive/refs/heads/main.zip"; TPL_DIR="nothing-sni-main" ;;
+        *) TPL_URL="https://github.com/eGamesAPI/simple-web-templates/archive/refs/heads/main.zip"; TPL_DIR="simple-web-templates-main" ;;
+    esac
+    echo "  Загрузка шаблона..."
+    cd /opt || { echo "  Ошибка: /opt недоступен"; return 1; }
+    rm -f main.zip 2>/dev/null
+    rm -rf simple-web-templates-main sni-templates-main nothing-sni-main 2>/dev/null
+    for i in 1 2 3; do
+        wget -q --timeout=30 -O main.zip "$TPL_URL" && break
+        echo "  Повтор загрузки ($i/3)..."
+        sleep 3
+    done
+    if [ ! -f main.zip ] || [ ! -s main.zip ]; then
+        echo -e "  ${YELLOW}Не удалось загрузить шаблон. Создана минимальная страница.${NC}"
+        echo "<!DOCTYPE html><html><head><meta charset=utf-8><title>Site</title></head><body><p>Welcome.</p></body></html>" > /var/www/html/index.html
+        rm -f main.zip
+        return 0
+    fi
+    unzip -o -q main.zip 2>/dev/null || { echo "  Ошибка распаковки"; rm -f main.zip; return 1; }
+    rm -f main.zip
+    if [ "$TPL_CHOICE" = "3" ]; then
+        N=$((RANDOM % 8 + 1))
+        [ -f "$TPL_DIR/$N.html" ] && cp "$TPL_DIR/$N.html" /var/www/html/index.html || cp "$TPL_DIR/"*.html /var/www/html/ 2>/dev/null || true
+    else
+        if [ -d "$TPL_DIR" ]; then
+            if [ "$TPL_CHOICE" = "1" ]; then
+                rm -rf "$TPL_DIR/assets" "$TPL_DIR/.gitattributes" "$TPL_DIR/README.md" "$TPL_DIR/_config.yml" 2>/dev/null
+            elif [ "$TPL_CHOICE" = "2" ]; then
+                rm -rf "$TPL_DIR/assets" "$TPL_DIR/README.md" "$TPL_DIR/index.html" 2>/dev/null
+            fi
+            SUBDIR=$(find "./$TPL_DIR" -maxdepth 1 -type d ! -path "./$TPL_DIR" | shuf -n 1 | sed 's|.*/||')
+            if [ -n "$SUBDIR" ] && [ -d "$TPL_DIR/$SUBDIR" ]; then
+                rm -rf /var/www/html/*
+                cp -a "$TPL_DIR/$SUBDIR"/. /var/www/html/
+            else
+                rm -rf /var/www/html/*
+                cp -a "$TPL_DIR"/. /var/www/html/ 2>/dev/null || true
+            fi
+        fi
+    fi
+    if [ ! -f /var/www/html/index.html ] && [ -n "$(ls -A /var/www/html 2>/dev/null)" ]; then
+        FIRST_HTML=$(find /var/www/html -maxdepth 2 -name "*.html" -type f | head -n 1)
+        [ -n "$FIRST_HTML" ] && cp "$FIRST_HTML" /var/www/html/index.html
+    fi
+    if [ ! -f /var/www/html/index.html ]; then
+        echo "<!DOCTYPE html><html><head><meta charset=utf-8><title>Site</title></head><body><p>Welcome.</p></body></html>" > /var/www/html/index.html
+    fi
+    chown -R www-data:www-data /var/www/html 2>/dev/null || true
+    rm -rf simple-web-templates-main sni-templates-main nothing-sni-main 2>/dev/null
+    echo -e "  ${GREEN}Заглушка установлена в /var/www/html${NC}"
+}
 
 # 2b. Установка Remnawave Panel (официальный remnawave/backend + Subscription Page)
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
@@ -333,6 +403,29 @@ REMNAWAVESUB
         echo "REMNAWAVE_API_TOKEN=" >> .env
     fi
 
+    # Панель + нода: фиксированная подсеть для доступа панели к ноде (172.30.0.1 = host)
+    if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ -n "$SELFSTEAL_DOMAIN" ]; then
+        if ! grep -q "subnet: 172.30" docker-compose-prod.yml 2>/dev/null; then
+            python3 << 'PYEOF'
+with open('docker-compose-prod.yml') as f:
+    content = f.read()
+# Вставить ipam после блока remnawave-network driver: bridge
+if "ipam:" not in content and "remnawave-network" in content:
+    old = "remnawave-network:\n    name: remnawave-network\n    driver: bridge\n    external: false"
+    new = "remnawave-network:\n    name: remnawave-network\n    driver: bridge\n    ipam:\n      config:\n        - subnet: 172.30.0.0/16\n    external: false"
+    if old in content:
+        content = content.replace(old, new, 1)
+    else:
+        # Альтернативный отступ (пробелы)
+        old2 = "remnawave-network:\n name: remnawave-network\n driver: bridge\n external: false"
+        new2 = "remnawave-network:\n name: remnawave-network\n driver: bridge\n ipam:\n   config:\n     - subnet: 172.30.0.0/16\n external: false"
+        content = content.replace(old2, new2, 1) if old2 in content else content
+    with open('docker-compose-prod.yml', 'w') as f:
+        f.write(content)
+PYEOF
+        fi
+    fi
+
     # Остановить старые контейнеры (если была установка с remnawave/panel)
     docker stop remnawave-panel remnawave-subscription 2>/dev/null || true
     docker rm remnawave-panel remnawave-subscription 2>/dev/null || true
@@ -393,7 +486,321 @@ NGINXSUBEOF
         [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$SUB_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" || true
         echo "  Subscription: https://$SUB_DOMAIN"
     fi
+    # SelfSteal: отдельный домен только для заглушки (не проксируем на панель)
+    if [ -n "$SELFSTEAL_DOMAIN" ]; then
+        mkdir -p /var/www/html
+        cat > /etc/nginx/sites-available/remnawave-selfsteal << NGINXSELFSTEALEOF
+server {
+    listen 80;
+    server_name $SELFSTEAL_DOMAIN;
+    root /var/www/html;
+    index index.html;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
+    location / { try_files \$uri \$uri/ =404; }
+}
+NGINXSELFSTEALEOF
+        ln -sf /etc/nginx/sites-available/remnawave-selfsteal /etc/nginx/sites-enabled/ 2>/dev/null || true
+        [ -n "$CERTBOT_EMAIL" ] && certbot --nginx -d "$SELFSTEAL_DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" || true
+        echo "  SelfSteal (заглушка): https://$SELFSTEAL_DOMAIN"
+        install_selfsteal_template
+    fi
     nginx -t && systemctl reload nginx || true
+
+    # ---------- Панель + нода: установка remnanode и nginx на сокете (как remnawave-reverse-proxy) ----------
+    if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ -n "$SELFSTEAL_DOMAIN" ]; then
+        if [ -z "$PANEL_DOMAIN" ] || [ -z "$SUB_DOMAIN" ]; then
+            echo -e "${YELLOW}  Для режима «Панель и нода» нужны домены панели и подписки. Нода не установлена.${NC}"
+        else
+        echo ""
+        echo -e "${CYAN}[Remnawave] Установка ноды (Xray) и nginx на сокете...${NC}"
+
+        # Убрать host-nginx для panel/sub/selfsteal — трафик пойдёт через 443 -> Xray -> сокет -> nginx
+        rm -f /etc/nginx/sites-enabled/remnawave-panel /etc/nginx/sites-enabled/remnawave-sub /etc/nginx/sites-enabled/remnawave-selfsteal 2>/dev/null || true
+        # Освободить 443 для Xray: webhook бота перенести на 8443
+        VPNBOT_SITE="/etc/nginx/sites-available/vpn-bot"
+        if [ -f "$VPNBOT_SITE" ] && grep -q "listen 443" "$VPNBOT_SITE" 2>/dev/null; then
+            sed -i 's/listen 443 ssl;/listen 8443 ssl;/' "$VPNBOT_SITE"
+            sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' "$VPNBOT_SITE"
+            NEED_WEBHOOK_8443=1
+            ufw allow 8443/tcp comment 'VPN Bot webhook (443 used by Xray)' 2>/dev/null || true
+            echo -e "  Webhook бота переведён на порт ${YELLOW}8443${NC} (443 занят Xray)."
+        fi
+        nginx -t && systemctl reload nginx || true
+
+        # Случайные cookie для доступа к панели (как в remnawave-reverse-proxy)
+        COOKIES_R1=$(openssl rand -hex 4)
+        COOKIES_R2=$(openssl rand -hex 4)
+
+        # Сертификаты: используем те же, что уже получил certbot
+        PANEL_CERT_DOMAIN="${PANEL_DOMAIN}"
+        SUB_CERT_DOMAIN="${SUB_DOMAIN}"
+        NODE_CERT_DOMAIN="${SELFSTEAL_DOMAIN}"
+        [ -z "$PANEL_DOMAIN" ] && PANEL_CERT_DOMAIN="panel.local"
+        [ -z "$SUB_DOMAIN" ] && SUB_CERT_DOMAIN="sub.local"
+
+        # nginx.conf для сокета (listen unix:/dev/shm/nginx.sock)
+        cat > "$REMNAWAVE_DIR/nginx.conf" << NGINXCONFEOF
+server_names_hash_bucket_size 64;
+
+upstream remnawave {
+    server 127.0.0.1:$PANEL_PORT;
+}
+upstream json {
+    server 127.0.0.1:$SUB_PORT;
+}
+
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ""      close;
+}
+map \$http_cookie \$auth_cookie {
+    default 0;
+    "~*${COOKIES_R1}=${COOKIES_R2}" 1;
+}
+map \$arg_${COOKIES_R1} \$auth_query {
+    default 0;
+    "${COOKIES_R2}" 1;
+}
+map "\$auth_cookie\$auth_query" \$authorized {
+    "~1" 1;
+    default 0;
+}
+map \$arg_${COOKIES_R1} \$set_cookie_header {
+    "${COOKIES_R2}" "${COOKIES_R1}=${COOKIES_R2}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000";
+    default "";
+}
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ecdh_curve X25519:prime256v1:secp384r1;
+ssl_prefer_server_ciphers on;
+ssl_session_timeout 1d;
+ssl_session_cache shared:MozSSL:10m;
+ssl_session_tickets off;
+
+server {
+    server_name $PANEL_DOMAIN;
+    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
+    http2 on;
+    ssl_certificate /etc/nginx/ssl/live/$PANEL_CERT_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/live/$PANEL_CERT_DOMAIN/privkey.pem;
+    add_header Set-Cookie \$set_cookie_header;
+    location / {
+        error_page 418 = @unauthorized;
+        if (\$authorized = 0) { return 418; }
+        proxy_http_version 1.1;
+        proxy_pass http://remnawave;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location @unauthorized {
+        root /var/www/html;
+        index index.html;
+    }
+}
+
+server {
+    server_name $SUB_DOMAIN;
+    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
+    http2 on;
+    ssl_certificate /etc/nginx/ssl/live/$SUB_CERT_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/live/$SUB_CERT_DOMAIN/privkey.pem;
+    location / {
+        proxy_http_version 1.1;
+        proxy_pass http://json;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+
+server {
+    server_name $SELFSTEAL_DOMAIN;
+    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
+    http2 on;
+    ssl_certificate /etc/nginx/ssl/live/$NODE_CERT_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/live/$NODE_CERT_DOMAIN/privkey.pem;
+    root /var/www/html;
+    index index.html;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+}
+
+server {
+    listen unix:/dev/shm/nginx.sock ssl proxy_protocol default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+NGINXCONFEOF
+
+        # docker-compose-node.yml: nginx (сокет) + remnanode
+        cat > "$REMNAWAVE_DIR/docker-compose-node.yml" << COMPOSENODEEOF
+services:
+  remnawave-nginx:
+    image: nginx:1.28-alpine
+    container_name: remnawave-nginx
+    network_mode: host
+    restart: always
+    volumes:
+      - $REMNAWAVE_DIR/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /dev/shm:/dev/shm:rw
+      - /var/www/html:/var/www/html:ro
+      - /etc/letsencrypt/live:/etc/nginx/ssl/live:ro
+    command: sh -c 'rm -f /dev/shm/nginx.sock && exec nginx -g "daemon off;"'
+
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    network_mode: host
+    restart: always
+    environment:
+      - NODE_PORT=2222
+      - SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL
+    volumes:
+      - /dev/shm:/dev/shm:rw
+COMPOSENODEEOF
+
+        # Дождаться готовности API панели
+        echo "  Ожидание API панели..."
+        domain_url="127.0.0.1:$PANEL_PORT"
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -s -f --max-time 5 "http://$domain_url/api/auth/status" -H "X-Forwarded-For: 127.0.0.1" -H "X-Forwarded-Proto: https" >/dev/null 2>&1; then
+                break
+            fi
+            [ "$attempt" -eq 10 ] && { echo -e "${RED}  API панели недоступен. Нода не установлена.${NC}"; break; }
+            sleep 10
+        done
+
+        # Регистрация и настройка через API (как в remnawave-reverse-proxy)
+        SUPERADMIN_USER=$(openssl rand -hex 4)
+        SUPERADMIN_PASS=$(openssl rand -hex 12)
+        api_register() {
+            curl -s -X POST "http://$domain_url/api/auth/register" \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}"
+        }
+        resp=$(api_register)
+        token=""
+        if echo "$resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then
+            token=$(echo "$resp" | jq -r '.response.accessToken')
+        elif echo "$resp" | jq -e '.accessToken' >/dev/null 2>&1; then
+            token=$(echo "$resp" | jq -r '.accessToken')
+        fi
+        if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo -e "${YELLOW}  Регистрация через API не удалась (возможно, первый пользователь уже создан).${NC}"
+            echo -e "  Создайте ноду вручную в панели и добавьте SECRET_KEY в $REMNAWAVE_DIR/docker-compose-node.yml"
+        else
+            echo "  Регистрация в панели выполнена."
+
+            # Публичный ключ для ноды
+            pubkey_resp=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/keygen")
+            PUBLIC_KEY=$(echo "$pubkey_resp" | jq -r '.response.pubKey // .pubKey // empty')
+            if [ -z "$PUBLIC_KEY" ]; then
+                echo -e "${YELLOW}  Не удалось получить публичный ключ. Ноду нужно настроить вручную.${NC}"
+            else
+                sed -i "s|SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL|SECRET_KEY=$PUBLIC_KEY|" "$REMNAWAVE_DIR/docker-compose-node.yml"
+
+                # x25519 ключи и конфиг-профиль
+                keys_resp=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/system/tools/x25519/generate")
+                PRIVATE_KEY=$(echo "$keys_resp" | jq -r '.response.keypairs[0].privateKey // empty')
+                if [ -z "$PRIVATE_KEY" ]; then
+                    echo -e "${YELLOW}  Не удалось сгенерировать x25519. Профиль создайте в панели.${NC}"
+                else
+                    # Удалить дефолтный профиль (если есть)
+                    profiles=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles")
+                    def_uuid=$(echo "$profiles" | jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid' 2>/dev/null)
+                    [ -n "$def_uuid" ] && curl -s -X DELETE -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles/$def_uuid" >/dev/null
+
+                    SHORT_ID=$(openssl rand -hex 8)
+                    create_profile=$(curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+                        "http://$domain_url/api/config-profiles" \
+                        -d "{
+                          \"name\": \"StealConfig\",
+                          \"config\": {
+                            \"log\": {\"loglevel\": \"warning\"},
+                            \"inbounds\": [{
+                              \"tag\": \"Steal\",
+                              \"port\": 443,
+                              \"protocol\": \"vless\",
+                              \"settings\": {\"clients\": [], \"decryption\": \"none\"},
+                              \"sniffing\": {\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\"]},
+                              \"streamSettings\": {
+                                \"network\": \"tcp\",
+                                \"security\": \"reality\",
+                                \"realitySettings\": {
+                                  \"show\": false,
+                                  \"xver\": 1,
+                                  \"dest\": \"/dev/shm/nginx.sock\",
+                                  \"serverNames\": [\"$SELFSTEAL_DOMAIN\"],
+                                  \"privateKey\": \"$PRIVATE_KEY\",
+                                  \"shortIds\": [\"$SHORT_ID\"]
+                                }
+                              }
+                            }],
+                            \"outbounds\": [
+                              {\"tag\": \"DIRECT\", \"protocol\": \"freedom\"},
+                              {\"tag\": \"BLOCK\", \"protocol\": \"blackhole\"}
+                            ],
+                            \"routing\": {
+                              \"rules\": [
+                                {\"ip\": [\"geoip:private\"], \"type\": \"field\", \"outboundTag\": \"BLOCK\"},
+                                {\"type\": \"field\", \"protocol\": [\"bittorrent\"], \"outboundTag\": \"BLOCK\"}
+                              ]
+                            }
+                          }
+                        }")
+                    config_uuid=$(echo "$create_profile" | jq -r '.response.uuid // empty')
+                    inbound_uuid=$(echo "$create_profile" | jq -r '.response.inbounds[0].uuid // empty')
+                    if [ -z "$config_uuid" ] || [ -z "$inbound_uuid" ]; then
+                        echo -e "${YELLOW}  Создание конфиг-профиля не удалось. Создайте в панели вручную.${NC}"
+                    else
+                        # Нода в панели (адрес 172.30.0.1 — host с точки зрения docker-сети)
+                        node_payload="{\"name\":\"Node1\",\"address\":\"172.30.0.1\",\"port\":2222,\"configProfile\":{\"activeConfigProfileUuid\":\"$config_uuid\",\"activeInbounds\":[\"$inbound_uuid\"]},\"isTrafficTrackingActive\":false,\"trafficLimitBytes\":0,\"notifyPercent\":0,\"trafficResetDay\":31,\"excludedInbounds\":[],\"countryCode\":\"XX\",\"consumptionMultiplier\":1.0}"
+                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/nodes" -d "$node_payload" >/dev/null
+
+                        # Host для подписок
+                        host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":443,\"path\":\"\",\"sni\":\"$SELFSTEAL_DOMAIN\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
+                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/hosts" -d "$host_payload" >/dev/null
+
+                        # Internal Squad — привязать inbound
+                        squads=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/internal-squads")
+                        squad_uuid=$(echo "$squads" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null)
+                        if [ -n "$squad_uuid" ]; then
+                            update_squad=$(curl -s -X PATCH -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/internal-squads" \
+                                -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}")
+                        fi
+
+                        # API-токен для Subscription Page
+                        tok_resp=$(curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}')
+                        api_tok=$(echo "$tok_resp" | jq -r '.response.token // empty')
+                        if [ -n "$api_tok" ]; then
+                            sed -i "s|^REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_tok|" "$REMNAWAVE_DIR/.env"
+                        fi
+                        echo -e "  ${GREEN}Конфиг-профиль, нода и host созданы в панели.${NC}"
+                    fi
+                fi
+            fi
+        fi
+
+        # Запуск nginx (сокет) и remnanode
+        cd "$REMNAWAVE_DIR"
+        $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnawave-nginx remnanode
+        docker restart remnawave-subscription-page 2>/dev/null || true
+
+        # UFW: панель (в docker) подключается к ноде на 2222 на хосте
+        ufw allow from 172.30.0.0/16 to any port 2222 proto tcp 2>/dev/null || true
+        ufw reload 2>/dev/null || true
+
+        echo -e "${GREEN}  Нода (remnanode) и nginx на сокете запущены.${NC}"
+        echo -e "  Панель по ссылке с секретом: ${YELLOW}https://${PANEL_DOMAIN}/auth/login?${COOKIES_R1}=${COOKIES_R2}${NC}"
+        echo -e "  Логин: $SUPERADMIN_USER  Пароль: $SUPERADMIN_PASS"
+        echo ""
+        fi
+    fi
 
     # Обновить .env бота (если ещё не создан, будет ниже)
     # API — всегда localhost (бот и панель на одном сервере, без зависимости от DNS)
@@ -522,7 +929,7 @@ echo "  Nginx: server_name=$WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
 
 # Обновить .env: WEBHOOK_BASE_URL
 if [ -f "$INSTALL_DIR/.env" ] && [ "$WEBHOOK_DOMAIN" != "bot.example.com" ]; then
-    WEBHOOK_URL="https://$WEBHOOK_DOMAIN"
+    [ -n "$NEED_WEBHOOK_8443" ] && WEBHOOK_URL="https://$WEBHOOK_DOMAIN:8443" || WEBHOOK_URL="https://$WEBHOOK_DOMAIN"
     if grep -q "^WEBHOOK_BASE_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
         sed -i "s|^WEBHOOK_BASE_URL=.*|WEBHOOK_BASE_URL=$WEBHOOK_URL|" "$INSTALL_DIR/.env"
     else
@@ -539,6 +946,14 @@ if [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && [ -n "$CERTBOT_EMAIL" ]; then
     else
         echo "  SSL: не удалось (проверьте DNS: $WEBHOOK_DOMAIN -> IP сервера)"
     fi
+fi
+# Если установлена нода, 443 занят Xray — перевести webhook на 8443 (если ещё не сделано в блоке Remnawave)
+if [ -n "$NEED_WEBHOOK_8443" ] && [ -f /etc/nginx/sites-available/vpn-bot ] && grep -q "listen 443" /etc/nginx/sites-available/vpn-bot 2>/dev/null; then
+    sed -i 's/listen 443 ssl;/listen 8443 ssl;/' /etc/nginx/sites-available/vpn-bot
+    sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' /etc/nginx/sites-available/vpn-bot
+    ufw allow 8443/tcp comment 'VPN Bot webhook' 2>/dev/null || true
+    nginx -t && systemctl reload nginx
+    echo "  Webhook (443 занят Xray): порт 8443, WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN:8443"
 fi
 
 # Обновить .env бота: REMNAWAVE_* (если панель установлена)
@@ -620,8 +1035,9 @@ SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo -e "   Откройте в браузере: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
 fi
 echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
-[ -n "$SELFSTEAL_DOMAIN" ] && echo -e "   • SelfSteal домен для ноды: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (укажите при настройке ноды)"
-echo -e "   • Добавьте Node (VPN-сервер), создайте Internal Squad (группу подписок)"
+[ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && echo -e "   • Нода и заглушка SelfSteal: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (уже установлены скриптом)"
+[ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • SelfSteal домен для ноды: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (ноду настройте скриптом remnawave-reverse-proxy)"
+echo -e "   • Создайте Internal Squad (группу подписок) и привяжите ноду, если ещё не сделано"
 echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
 echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
 echo -e "     (строка REMNAWAVE_API_TOKEN=). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
@@ -640,7 +1056,7 @@ echo -e "   Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
 echo ""
 echo -e "${CYAN}Шаг 3. ЮKassa${NC}"
 echo -e "   В личном кабинете ЮKassa → Настройки → Уведомления укажите URL:"
-echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
+[ -n "$NEED_WEBHOOK_8443" ] && echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}:8443/webhook/yookassa${NC}" || echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
 echo ""
 echo -e "${CYAN}Шаг 4. Перезапуск бота${NC}"
 echo -e "   ${CYAN}sudo systemctl restart vpn-bot${NC}"
