@@ -5,6 +5,7 @@
 # Явно: sudo ./install.sh update  или  sudo ./install.sh install
 # Автоматизация: WEBHOOK_DOMAIN=bot.example.com CERTBOT_EMAIL=admin@example.com sudo ./install.sh
 # С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.domain.com (опционально)
+# Режим Remnawave без запроса: REMNAWAVE_PANEL_INSTALL=true|false; для ноды: REMNAWAVE_NODE_INSTALL=true SELFSTEAL_DOMAIN=node.example.com
 
 set -e
 # Ошибки и вывод команд установки показываются в консоли (без -qq и скрытия stderr)
@@ -18,7 +19,10 @@ NC='\033[0m'
 
 REPO_URL="${VPN_BOT_REPO:-https://github.com/TheNotus/vlessbot.git}"
 REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
-REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-true}"
+# Remnawave: задаётся выбором пользователя или REMNAWAVE_MODE=panel_only | panel_and_node | node_only | skip
+REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-}"
+REMNAWAVE_NODE_INSTALL="${REMNAWAVE_NODE_INSTALL:-false}"
+SELFSTEAL_DOMAIN="${SELFSTEAL_DOMAIN:-}"
 
 SCRIPT_DIR=""
 if [ -n "$0" ] && [ -f "$0" ] 2>/dev/null; then
@@ -142,6 +146,48 @@ echo ""
 echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
 echo -e "  (Обновление при следующем запуске: ${CYAN}sudo ./install.sh${NC})"
 echo ""
+
+# Выбор Remnawave (как в https://github.com/eGamesAPI/remnawave-reverse-proxy)
+if [ -z "$REMNAWAVE_PANEL_INSTALL" ]; then
+    echo -e "${CYAN}Установить Remnawave на этот сервер?${NC}"
+    echo "  1) Нет — только VPN Bot"
+    echo "  2) Панель и нода на одном сервере (панель ставим здесь; ноду настраивают в панели или по инструкции)"
+    echo "  3) Только панель Remnawave"
+    echo "  4) Только нода Remnawave (бот не ставим; ноду ставьте скриптом remnawave-reverse-proxy)"
+    read -r -p "Выбор (1–4) [1]: " REMNAWAVE_CHOICE </dev/tty
+    REMNAWAVE_CHOICE="${REMNAWAVE_CHOICE:-1}"
+    case "$REMNAWAVE_CHOICE" in
+        2) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=true ;;
+        3) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=false ;;
+        4) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=true ;;
+        *) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=false ;;
+    esac
+    echo ""
+fi
+
+# Режим «только нода» — выводим инструкцию и выходим (бот не ставим)
+if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ "$REMNAWAVE_PANEL_INSTALL" != "true" ]; then
+    echo -e "${YELLOW}Режим «Только нода»: этот скрипт ставит VPN Bot и опционально панель.${NC}"
+    echo "Для установки только ноды Remnawave (Xray, SelfSteal) используйте:"
+    echo -e "  ${CYAN}bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)${NC}"
+    echo ""
+    read -r -p "Всё равно установить VPN Bot на этот сервер? (y/N): " INSTALL_BOT_ANYWAY </dev/tty
+    if [ "${INSTALL_BOT_ANYWAY:-n}" != "y" ] && [ "${INSTALL_BOT_ANYWAY:-n}" != "Y" ]; then
+        echo "Выход. Для ноды запустите скрипт по ссылке выше."
+        exit 0
+    fi
+    REMNAWAVE_NODE_INSTALL=false
+fi
+
+# SelfSteal домен для ноды (только при выборе «Панель и нода на одном сервере»)
+if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
+    if [ -z "$SELFSTEAL_DOMAIN" ]; then
+        echo -e "${CYAN}Домен для SelfSteal (нода, маскировка):${NC}"
+        echo "  Например node.example.com — на этот домен будет отдаваться заглушка сайта."
+        read -r -p "SelfSteal домен (Enter — пропустить): " SELFSTEAL_DOMAIN </dev/tty
+    fi
+    echo ""
+fi
 
 # Запрос доменов (если не заданы переменными)
 # </dev/tty — чтобы read работал при curl | bash (stdin иначе занят pipe)
@@ -574,6 +620,7 @@ SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo -e "   Откройте в браузере: ${YELLOW}http://${SERVER_IP:-IP}:${PANEL_PORT}${NC}"
 fi
 echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
+[ -n "$SELFSTEAL_DOMAIN" ] && echo -e "   • SelfSteal домен для ноды: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (укажите при настройке ноды)"
 echo -e "   • Добавьте Node (VPN-сервер), создайте Internal Squad (группу подписок)"
 echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
 echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
