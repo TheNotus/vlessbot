@@ -664,26 +664,33 @@ services:
       - /dev/shm:/dev/shm:rw
 COMPOSENODEEOF
 
-        # Дождаться готовности API панели
+        # Дождаться готовности API панели (до ~3.5 мин: 20 попыток по 10 с)
         echo "  Ожидание API панели..."
         domain_url="127.0.0.1:$PANEL_PORT"
-        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        api_ready=""
+        attempt=1
+        while [ "$attempt" -le 20 ]; do
             if curl -s -f --max-time 5 "http://$domain_url/api/auth/status" -H "X-Forwarded-For: 127.0.0.1" -H "X-Forwarded-Proto: https" >/dev/null 2>&1; then
+                api_ready=1
                 break
             fi
-            [ "$attempt" -eq 10 ] && { echo -e "${RED}  API панели недоступен. Нода не установлена.${NC}"; break; }
+            [ "$attempt" -eq 20 ] && echo -e "${RED}  API панели недоступен после 20 попыток. Настройте ноду вручную.${NC}"
             sleep 10
+            attempt=$((attempt + 1))
         done
 
-        # Регистрация и настройка через API (как в remnawave-reverse-proxy)
+        # Регистрация и настройка через API (как в remnawave-reverse-proxy). Не выходить при сбое curl (set -e).
         SUPERADMIN_USER=$(openssl rand -hex 4)
         SUPERADMIN_PASS=$(openssl rand -hex 12)
         api_register() {
-            curl -s -X POST "http://$domain_url/api/auth/register" \
+            curl -s --connect-timeout 5 --max-time 15 -X POST "http://$domain_url/api/auth/register" \
                 -H "Content-Type: application/json" \
                 -d "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}"
         }
-        resp=$(api_register)
+        resp=""
+        if [ -n "$api_ready" ]; then
+            resp=$(api_register) || true
+        fi
         token=""
         if echo "$resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then
             token=$(echo "$resp" | jq -r '.response.accessToken')
@@ -697,7 +704,7 @@ COMPOSENODEEOF
             echo "  Регистрация в панели выполнена."
 
             # Публичный ключ для ноды
-            pubkey_resp=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/keygen")
+            pubkey_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/keygen") || true
             PUBLIC_KEY=$(echo "$pubkey_resp" | jq -r '.response.pubKey // .pubKey // empty')
             if [ -z "$PUBLIC_KEY" ]; then
                 echo -e "${YELLOW}  Не удалось получить публичный ключ. Ноду нужно настроить вручную.${NC}"
@@ -705,18 +712,18 @@ COMPOSENODEEOF
                 sed -i "s|SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL|SECRET_KEY=$PUBLIC_KEY|" "$REMNAWAVE_DIR/docker-compose-node.yml"
 
                 # x25519 ключи и конфиг-профиль
-                keys_resp=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/system/tools/x25519/generate")
+                keys_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/system/tools/x25519/generate") || true
                 PRIVATE_KEY=$(echo "$keys_resp" | jq -r '.response.keypairs[0].privateKey // empty')
                 if [ -z "$PRIVATE_KEY" ]; then
                     echo -e "${YELLOW}  Не удалось сгенерировать x25519. Профиль создайте в панели.${NC}"
                 else
                     # Удалить дефолтный профиль (если есть)
-                    profiles=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles")
+                    profiles=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles") || true
                     def_uuid=$(echo "$profiles" | jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid' 2>/dev/null)
-                    [ -n "$def_uuid" ] && curl -s -X DELETE -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles/$def_uuid" >/dev/null
+                    [ -n "$def_uuid" ] && curl -s -X DELETE -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
 
                     SHORT_ID=$(openssl rand -hex 8)
-                    create_profile=$(curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+                    create_profile=$(curl -s --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
                         "http://$domain_url/api/config-profiles" \
                         -d "{
                           \"name\": \"StealConfig\",
@@ -752,7 +759,7 @@ COMPOSENODEEOF
                               ]
                             }
                           }
-                        }")
+                        }") || true
                     config_uuid=$(echo "$create_profile" | jq -r '.response.uuid // empty')
                     inbound_uuid=$(echo "$create_profile" | jq -r '.response.inbounds[0].uuid // empty')
                     if [ -z "$config_uuid" ] || [ -z "$inbound_uuid" ]; then
@@ -760,22 +767,22 @@ COMPOSENODEEOF
                     else
                         # Нода в панели (адрес 172.30.0.1 — host с точки зрения docker-сети)
                         node_payload="{\"name\":\"Node1\",\"address\":\"172.30.0.1\",\"port\":2222,\"configProfile\":{\"activeConfigProfileUuid\":\"$config_uuid\",\"activeInbounds\":[\"$inbound_uuid\"]},\"isTrafficTrackingActive\":false,\"trafficLimitBytes\":0,\"notifyPercent\":0,\"trafficResetDay\":31,\"excludedInbounds\":[],\"countryCode\":\"XX\",\"consumptionMultiplier\":1.0}"
-                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/nodes" -d "$node_payload" >/dev/null
+                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
 
                         # Host для подписок
                         host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":443,\"path\":\"\",\"sni\":\"$SELFSTEAL_DOMAIN\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
-                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/hosts" -d "$host_payload" >/dev/null
+                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
 
                         # Internal Squad — привязать inbound
-                        squads=$(curl -s -H "Authorization: Bearer $token" "http://$domain_url/api/internal-squads")
+                        squads=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/internal-squads") || true
                         squad_uuid=$(echo "$squads" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null)
                         if [ -n "$squad_uuid" ]; then
                             update_squad=$(curl -s -X PATCH -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/internal-squads" \
-                                -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}")
+                                -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}") || true
                         fi
 
                         # API-токен для Subscription Page
-                        tok_resp=$(curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}')
+                        tok_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
                         api_tok=$(echo "$tok_resp" | jq -r '.response.token // empty')
                         if [ -n "$api_tok" ]; then
                             sed -i "s|^REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_tok|" "$REMNAWAVE_DIR/.env"
