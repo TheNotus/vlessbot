@@ -19,7 +19,7 @@ NC='\033[0m'
 
 REPO_URL="${VPN_BOT_REPO:-https://github.com/TheNotus/vlessbot.git}"
 REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
-# Remnawave: задаётся выбором пользователя или REMNAWAVE_MODE=panel_only | panel_and_node | node_only | skip
+# Remnawave: выбор пользователя (1–4) или переменные REMNAWAVE_PANEL_INSTALL=true|false, REMNAWAVE_NODE_INSTALL=true|false
 REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-}"
 REMNAWAVE_NODE_INSTALL="${REMNAWAVE_NODE_INSTALL:-false}"
 SELFSTEAL_DOMAIN="${SELFSTEAL_DOMAIN:-}"
@@ -866,9 +866,9 @@ rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 nginx -t && systemctl reload nginx || echo "  Nginx: отредактируйте /etc/nginx/sites-available/vpn-bot (server_name) и выполните: sudo nginx -t"
 echo "  Nginx: server_name=$WEBHOOK_DOMAIN -> 127.0.0.1:$WEBHOOK_PORT"
 
-# Обновить .env: WEBHOOK_BASE_URL
+# Обновить .env: WEBHOOK_BASE_URL (при панель+нода 443 занят под панель — webhook можно оставить на 443, т.к. другой server_name)
 if [ -f "$INSTALL_DIR/.env" ] && [ "$WEBHOOK_DOMAIN" != "bot.example.com" ]; then
-    [ -n "$NEED_WEBHOOK_8443" ] && WEBHOOK_URL="https://$WEBHOOK_DOMAIN:8443" || WEBHOOK_URL="https://$WEBHOOK_DOMAIN"
+    WEBHOOK_URL="https://$WEBHOOK_DOMAIN"
     if grep -q "^WEBHOOK_BASE_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
         sed -i "s|^WEBHOOK_BASE_URL=.*|WEBHOOK_BASE_URL=$WEBHOOK_URL|" "$INSTALL_DIR/.env"
     else
@@ -886,13 +886,13 @@ if [ "$WEBHOOK_DOMAIN" != "bot.example.com" ] && [ -n "$CERTBOT_EMAIL" ]; then
         echo "  SSL: не удалось (проверьте DNS: $WEBHOOK_DOMAIN -> IP сервера)"
     fi
 fi
-# Если установлена нода, 443 занят Xray — перевести webhook на 8443 (если ещё не сделано в блоке Remnawave)
-if [ -n "$NEED_WEBHOOK_8443" ] && [ -f /etc/nginx/sites-available/vpn-bot ] && grep -q "listen 443" /etc/nginx/sites-available/vpn-bot 2>/dev/null; then
-    sed -i 's/listen 443 ssl;/listen 8443 ssl;/' /etc/nginx/sites-available/vpn-bot
-    sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' /etc/nginx/sites-available/vpn-bot
-    nginx -t && systemctl reload nginx
-    echo "  Webhook (443 занят Xray): порт 8443, WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN:8443"
-fi
+# Резерв: если когда-либо понадобится вешать webhook на 8443 (один домен с панелью), выставить NEED_WEBHOOK_8443=1 и раскомментировать блок ниже
+# if [ -n "$NEED_WEBHOOK_8443" ] && [ -f /etc/nginx/sites-available/vpn-bot ] && grep -q "listen 443" /etc/nginx/sites-available/vpn-bot 2>/dev/null; then
+#     sed -i 's/listen 443 ssl;/listen 8443 ssl;/' /etc/nginx/sites-available/vpn-bot
+#     sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' /etc/nginx/sites-available/vpn-bot
+#     nginx -t && systemctl reload nginx
+#     echo "  Webhook на 8443, WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN:8443"
+# fi
 
 # Открытие портов (UFW): все нужные для работы
 echo ""
@@ -1024,7 +1024,7 @@ echo -e "   Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
 echo ""
 echo -e "${CYAN}Шаг 3. ЮKassa${NC}"
 echo -e "   В личном кабинете ЮKassa → Настройки → Уведомления укажите URL:"
-[ -n "$NEED_WEBHOOK_8443" ] && echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}:8443/webhook/yookassa${NC}" || echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
+echo -e "   ${YELLOW}https://${WEBHOOK_DOMAIN}/webhook/yookassa${NC}"
 echo ""
 echo -e "${CYAN}Шаг 4. Перезапуск бота${NC}"
 echo -e "   ${CYAN}sudo systemctl restart vpn-bot${NC}"
