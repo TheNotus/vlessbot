@@ -506,53 +506,20 @@ NGINXSELFSTEALEOF
     fi
     nginx -t && systemctl reload nginx || true
 
-    # ---------- Панель + нода: установка remnanode и nginx на сокете (как remnawave-reverse-proxy) ----------
+    # ---------- Панель + нода: панель по обычному HTTPS (443), нода Reality на 8443 ----------
     if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ -n "$SELFSTEAL_DOMAIN" ]; then
         if [ -z "$PANEL_DOMAIN" ] || [ -z "$SUB_DOMAIN" ]; then
             echo -e "${YELLOW}  Для режима «Панель и нода» нужны домены панели и подписки. Нода не установлена.${NC}"
         else
         echo ""
-        echo -e "${CYAN}[Remnawave] Установка ноды (Xray) и nginx на сокете...${NC}"
+        echo -e "${CYAN}[Remnawave] Установка ноды (Xray) на порту 8443. Панель остаётся на 443 (обычный HTTPS).${NC}"
 
-        # Убрать host-nginx для panel/sub/selfsteal — трафик пойдёт через 443 -> Xray -> сокет -> nginx
-        rm -f /etc/nginx/sites-enabled/remnawave-panel /etc/nginx/sites-enabled/remnawave-sub /etc/nginx/sites-enabled/remnawave-selfsteal 2>/dev/null || true
-        # Освободить 443 для Xray: webhook бота перенести на 8443
-        VPNBOT_SITE="/etc/nginx/sites-available/vpn-bot"
-        if [ -f "$VPNBOT_SITE" ] && grep -q "listen 443" "$VPNBOT_SITE" 2>/dev/null; then
-            sed -i 's/listen 443 ssl;/listen 8443 ssl;/' "$VPNBOT_SITE"
-            sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' "$VPNBOT_SITE"
-            NEED_WEBHOOK_8443=1
-            ufw allow 8443/tcp comment 'VPN Bot webhook (443 used by Xray)' 2>/dev/null || true
-            echo -e "  Webhook бота переведён на порт ${YELLOW}8443${NC} (443 занят Xray)."
-        fi
-        nginx -t && systemctl reload nginx || true
-
-        # Случайные cookie для доступа к панели (как в remnawave-reverse-proxy)
+        # Host nginx для panel/sub/selfsteal НЕ убираем — панель доступна по https://PANEL_DOMAIN в браузере
+        # Cookie для входа по секретной ссылке
         COOKIES_R1=$(openssl rand -hex 4)
         COOKIES_R2=$(openssl rand -hex 4)
-
-        # Сертификаты: используем те же, что уже получил certbot
-        PANEL_CERT_DOMAIN="${PANEL_DOMAIN}"
-        SUB_CERT_DOMAIN="${SUB_DOMAIN}"
-        NODE_CERT_DOMAIN="${SELFSTEAL_DOMAIN}"
-        [ -z "$PANEL_DOMAIN" ] && PANEL_CERT_DOMAIN="panel.local"
-        [ -z "$SUB_DOMAIN" ] && SUB_CERT_DOMAIN="sub.local"
-
-        # nginx.conf для сокета (listen unix:/dev/shm/nginx.sock)
-        cat > "$REMNAWAVE_DIR/nginx.conf" << NGINXCONFEOF
-server_names_hash_bucket_size 64;
-
-upstream remnawave {
-    server 127.0.0.1:$PANEL_PORT;
-}
-upstream json {
-    server 127.0.0.1:$SUB_PORT;
-}
-
-map \$http_upgrade \$connection_upgrade {
-    default upgrade;
-    ""      close;
-}
+        mkdir -p /etc/nginx/conf.d
+        cat > /etc/nginx/conf.d/remnawave-panel-cookie.conf << NGINXMAPEOF
 map \$http_cookie \$auth_cookie {
     default 0;
     "~*${COOKIES_R1}=${COOKIES_R2}" 1;
@@ -569,90 +536,42 @@ map \$arg_${COOKIES_R1} \$set_cookie_header {
     "${COOKIES_R2}" "${COOKIES_R1}=${COOKIES_R2}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000";
     default "";
 }
-
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_ecdh_curve X25519:prime256v1:secp384r1;
-ssl_prefer_server_ciphers on;
-ssl_session_timeout 1d;
-ssl_session_cache shared:MozSSL:10m;
-ssl_session_tickets off;
-
+NGINXMAPEOF
+        PANEL_CERT_DOMAIN="${PANEL_DOMAIN}"
+        [ -z "$PANEL_DOMAIN" ] && PANEL_CERT_DOMAIN="panel.local"
+        # Обновить конфиг панели: cookie-доступ + SSL (certbot уже мог добавить listen 443)
+        cat > /etc/nginx/sites-available/remnawave-panel << NGINXPANELEOF
 server {
+    listen 80;
     server_name $PANEL_DOMAIN;
-    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
-    http2 on;
-    ssl_certificate /etc/nginx/ssl/live/$PANEL_CERT_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/live/$PANEL_CERT_DOMAIN/privkey.pem;
+    return 301 https://\$host\$request_uri;
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $PANEL_DOMAIN;
+    ssl_certificate /etc/letsencrypt/live/$PANEL_CERT_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$PANEL_CERT_DOMAIN/privkey.pem;
     add_header Set-Cookie \$set_cookie_header;
     location / {
-        error_page 418 = @unauthorized;
-        if (\$authorized = 0) { return 418; }
+        if (\$authorized = 0) { return 302 https://\$host/auth/login?${COOKIES_R1}=${COOKIES_R2}; }
+        proxy_pass http://127.0.0.1:$PANEL_PORT;
         proxy_http_version 1.1;
-        proxy_pass http://remnawave;
-        proxy_set_header Host \$host;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    location @unauthorized {
-        root /var/www/html;
-        index index.html;
-    }
-}
-
-server {
-    server_name $SUB_DOMAIN;
-    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
-    http2 on;
-    ssl_certificate /etc/nginx/ssl/live/$SUB_CERT_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/live/$SUB_CERT_DOMAIN/privkey.pem;
-    location / {
-        proxy_http_version 1.1;
-        proxy_pass http://json;
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
+NGINXPANELEOF
+        ln -sf /etc/nginx/sites-available/remnawave-panel /etc/nginx/sites-enabled/ 2>/dev/null || true
+        nginx -t && systemctl reload nginx || true
 
-server {
-    server_name $SELFSTEAL_DOMAIN;
-    listen unix:/dev/shm/nginx.sock ssl proxy_protocol;
-    http2 on;
-    ssl_certificate /etc/nginx/ssl/live/$NODE_CERT_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/live/$NODE_CERT_DOMAIN/privkey.pem;
-    root /var/www/html;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow" always;
-}
-
-server {
-    listen unix:/dev/shm/nginx.sock ssl proxy_protocol default_server;
-    server_name _;
-    ssl_reject_handshake on;
-    return 444;
-}
-NGINXCONFEOF
-
-        # docker-compose-node.yml: nginx (сокет) + remnanode
+        # docker-compose-node.yml: только remnanode (без nginx на сокете)
         cat > "$REMNAWAVE_DIR/docker-compose-node.yml" << COMPOSENODEEOF
 services:
-  remnawave-nginx:
-    image: nginx:1.28-alpine
-    container_name: remnawave-nginx
-    network_mode: host
-    restart: always
-    volumes:
-      - $REMNAWAVE_DIR/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /dev/shm:/dev/shm:rw
-      - /var/www/html:/var/www/html:ro
-      - /etc/letsencrypt/live:/etc/nginx/ssl/live:ro
-      - /etc/letsencrypt/archive:/etc/nginx/ssl/archive:ro
-    command: sh -c 'rm -f /dev/shm/nginx.sock && exec nginx -g "daemon off;"'
-
   remnanode:
     image: remnawave/node:latest
     container_name: remnanode
@@ -661,8 +580,6 @@ services:
     environment:
       - NODE_PORT=2222
       - SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL
-    volumes:
-      - /dev/shm:/dev/shm:rw
 COMPOSENODEEOF
 
         # Дождаться готовности API панели (до ~3.5 мин: 20 попыток по 10 с)
@@ -724,6 +641,7 @@ COMPOSENODEEOF
                     [ -n "$def_uuid" ] && curl -s -X DELETE -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
 
                     SHORT_ID=$(openssl rand -hex 8)
+                    # Reality на 8443, dest — облако для маскировки (панель на 443 через host nginx)
                     create_profile=$(curl -s --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
                         "http://$domain_url/api/config-profiles" \
                         -d "{
@@ -732,7 +650,7 @@ COMPOSENODEEOF
                             \"log\": {\"loglevel\": \"warning\"},
                             \"inbounds\": [{
                               \"tag\": \"Steal\",
-                              \"port\": 443,
+                              \"port\": 8443,
                               \"protocol\": \"vless\",
                               \"settings\": {\"clients\": [], \"decryption\": \"none\"},
                               \"sniffing\": {\"enabled\": true, \"destOverride\": [\"http\", \"tls\", \"quic\"]},
@@ -742,8 +660,8 @@ COMPOSENODEEOF
                                 \"realitySettings\": {
                                   \"show\": false,
                                   \"xver\": 1,
-                                  \"dest\": \"/dev/shm/nginx.sock\",
-                                  \"serverNames\": [\"$SELFSTEAL_DOMAIN\"],
+                                  \"dest\": \"www.cloudflare.com:443\",
+                                  \"serverNames\": [\"www.cloudflare.com\"],
                                   \"privateKey\": \"$PRIVATE_KEY\",
                                   \"shortIds\": [\"$SHORT_ID\"]
                                 }
@@ -770,8 +688,8 @@ COMPOSENODEEOF
                         node_payload="{\"name\":\"Node1\",\"address\":\"172.30.0.1\",\"port\":2222,\"configProfile\":{\"activeConfigProfileUuid\":\"$config_uuid\",\"activeInbounds\":[\"$inbound_uuid\"]},\"isTrafficTrackingActive\":false,\"trafficLimitBytes\":0,\"notifyPercent\":0,\"trafficResetDay\":31,\"excludedInbounds\":[],\"countryCode\":\"XX\",\"consumptionMultiplier\":1.0}"
                         curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
 
-                        # Host для подписок
-                        host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":443,\"path\":\"\",\"sni\":\"$SELFSTEAL_DOMAIN\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
+                        # Host для подписок: порт 8443, SNI cloudflare
+                        host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":8443,\"path\":\"\",\"sni\":\"www.cloudflare.com\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
                         curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
 
                         # Internal Squad — привязать inbound
@@ -794,17 +712,14 @@ COMPOSENODEEOF
             fi
         fi
 
-        # Запуск nginx (сокет) и remnanode
+        # Запуск только remnanode (панель уже на host nginx 443)
         cd "$REMNAWAVE_DIR"
-        $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnawave-nginx remnanode
+        $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnanode
         docker restart remnawave-subscription-page 2>/dev/null || true
 
-        # UFW: панель (в docker) подключается к ноде на 2222 на хосте
-        ufw allow from 172.30.0.0/16 to any port 2222 proto tcp 2>/dev/null || true
-        ufw reload 2>/dev/null || true
-
         echo ""
-        echo -e "${GREEN}  Нода (remnanode) и nginx на сокете запущены.${NC} Ссылка на панель и учётные данные — в конце установки."
+        echo -e "${GREEN}  Нода (remnanode) запущена на порту 8443. Панель по обычному HTTPS: https://${PANEL_DOMAIN}${NC}"
+        echo -e "  Ссылка с секретом и учётные данные — в конце установки."
         echo ""
         fi
     fi
@@ -958,10 +873,30 @@ fi
 if [ -n "$NEED_WEBHOOK_8443" ] && [ -f /etc/nginx/sites-available/vpn-bot ] && grep -q "listen 443" /etc/nginx/sites-available/vpn-bot 2>/dev/null; then
     sed -i 's/listen 443 ssl;/listen 8443 ssl;/' /etc/nginx/sites-available/vpn-bot
     sed -i 's/listen \[::\]:443 ssl;/listen [::]:8443 ssl;/' /etc/nginx/sites-available/vpn-bot
-    ufw allow 8443/tcp comment 'VPN Bot webhook' 2>/dev/null || true
     nginx -t && systemctl reload nginx
     echo "  Webhook (443 занят Xray): порт 8443, WEBHOOK_BASE_URL=https://$WEBHOOK_DOMAIN:8443"
 fi
+
+# Открытие портов (UFW): все нужные для работы
+echo ""
+echo "[UFW] Открытие портов..."
+if command -v ufw >/dev/null 2>&1; then
+    ufw allow 22/tcp comment 'SSH' 2>/dev/null || true
+    ufw allow 80/tcp comment 'HTTP' 2>/dev/null || true
+    ufw allow 443/tcp comment 'HTTPS' 2>/dev/null || true
+    if [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
+        ufw allow 8443/tcp comment 'Reality/VLESS' 2>/dev/null || true
+        ufw allow from 172.30.0.0/16 to any port 2222 proto tcp comment 'Remnawave panel->node' 2>/dev/null || true
+    fi
+    ufw reload 2>/dev/null || true
+    echo -e "  ${GREEN}UFW: порты 22, 80, 443 открыты.${NC}"
+    [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && echo -e "  ${GREEN}  + 8443 (Reality), 2222 (из 172.30.0.0/16). Проверка: sudo ufw status${NC}"
+else
+    echo -e "  ${YELLOW}UFW не установлен. Откройте порты вручную (iptables или панель хостинга):${NC}"
+    echo -e "  ${YELLOW}  22/tcp (SSH), 80/tcp (HTTP), 443/tcp (HTTPS)${NC}"
+    [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && echo -e "  ${YELLOW}  8443/tcp (Reality), 2222/tcp (доступ с 172.30.0.0/16 — панель->нода)${NC}"
+fi
+echo ""
 
 # Обновить .env бота: REMNAWAVE_* (если панель установлена)
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && [ -f "$INSTALL_DIR/.env" ]; then
