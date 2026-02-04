@@ -72,7 +72,7 @@ class RemnawaveClient:
         """Получить JWT токен авторизации"""
         if self._token:
             return self._token
-
+            
         response = requests.post(
             f"{self.base_url}/api/auth/login",
             json={"username": self.username, "password": self.password},

@@ -86,7 +86,11 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
         logger.error(f"Нет telegram_id или plan_id в metadata: {metadata}")
         return
 
-    telegram_id = int(telegram_id)
+    try:
+        telegram_id = int(telegram_id)
+    except (TypeError, ValueError):
+        logger.error(f"Некорректный telegram_id в metadata: {telegram_id!r}")
+        return
     plan = next((p for p in config.plans if p.id == plan_id), None)
     if not plan:
         logger.error(f"Тариф {plan_id} не найден")

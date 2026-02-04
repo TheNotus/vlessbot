@@ -595,13 +595,13 @@ services:
       - SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL
 COMPOSENODEEOF
 
-        # Дождаться готовности API панели (до ~3.5 мин: 20 попыток по 10 с)
+        # Дождаться готовности API панели через Nginx (HTTPS), иначе ProxyCheckMiddleware даёт Empty reply
         echo "  Ожидание API панели..."
-        domain_url="127.0.0.1:$PANEL_PORT"
+        domain_url="https://$PANEL_DOMAIN"
         api_ready=""
         attempt=1
         while [ "$attempt" -le 20 ]; do
-            if curl -s -f --max-time 5 "http://$domain_url/api/auth/status" -H "X-Forwarded-For: 127.0.0.1" -H "X-Forwarded-Proto: https" >/dev/null 2>&1; then
+            if curl -k -s -f --max-time 5 "$domain_url/api/auth/status" >/dev/null 2>&1; then
                 api_ready=1
                 break
             fi
@@ -614,7 +614,7 @@ COMPOSENODEEOF
         SUPERADMIN_USER=$(openssl rand -hex 4)
         SUPERADMIN_PASS=$(openssl rand -hex 12)
         api_register() {
-            curl -s --connect-timeout 5 --max-time 15 -X POST "http://$domain_url/api/auth/register" \
+            curl -k -s --connect-timeout 5 --max-time 15 -X POST "$domain_url/api/auth/register" \
                 -H "Content-Type: application/json" \
                 -d "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}"
         }
@@ -635,7 +635,7 @@ COMPOSENODEEOF
             echo "  Регистрация в панели выполнена."
 
             # Публичный ключ для ноды
-            pubkey_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/keygen") || true
+            pubkey_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/keygen") || true
             PUBLIC_KEY=$(echo "$pubkey_resp" | jq -r '.response.pubKey // .pubKey // empty')
             if [ -z "$PUBLIC_KEY" ]; then
                 echo -e "${YELLOW}  Не удалось получить публичный ключ. Ноду нужно настроить вручную.${NC}"
@@ -643,20 +643,20 @@ COMPOSENODEEOF
                 sed -i "s|SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL|SECRET_KEY=$PUBLIC_KEY|" "$REMNAWAVE_DIR/docker-compose-node.yml"
 
                 # x25519 ключи и конфиг-профиль
-                keys_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/system/tools/x25519/generate") || true
+                keys_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/system/tools/x25519/generate") || true
                 PRIVATE_KEY=$(echo "$keys_resp" | jq -r '.response.keypairs[0].privateKey // empty')
                 if [ -z "$PRIVATE_KEY" ]; then
                     echo -e "${YELLOW}  Не удалось сгенерировать x25519. Профиль создайте в панели.${NC}"
                 else
                     # Удалить дефолтный профиль (если есть)
-                    profiles=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles") || true
+                    profiles=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/config-profiles") || true
                     def_uuid=$(echo "$profiles" | jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid' 2>/dev/null)
-                    [ -n "$def_uuid" ] && curl -s -X DELETE -H "Authorization: Bearer $token" "http://$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
+                    [ -n "$def_uuid" ] && curl -k -s -X DELETE -H "Authorization: Bearer $token" "$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
 
                     SHORT_ID=$(openssl rand -hex 8)
                     # Reality на 8443, dest — облако для маскировки (панель на 443 через host nginx)
-                    create_profile=$(curl -s --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
-                        "http://$domain_url/api/config-profiles" \
+                    create_profile=$(curl -k -s --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+                        "$domain_url/api/config-profiles" \
                         -d "{
                           \"name\": \"StealConfig\",
                           \"config\": {
@@ -699,22 +699,22 @@ COMPOSENODEEOF
                     else
                         # Нода в панели (адрес 172.30.0.1 — host с точки зрения docker-сети)
                         node_payload="{\"name\":\"Node1\",\"address\":\"172.30.0.1\",\"port\":2222,\"configProfile\":{\"activeConfigProfileUuid\":\"$config_uuid\",\"activeInbounds\":[\"$inbound_uuid\"]},\"isTrafficTrackingActive\":false,\"trafficLimitBytes\":0,\"notifyPercent\":0,\"trafficResetDay\":31,\"excludedInbounds\":[],\"countryCode\":\"XX\",\"consumptionMultiplier\":1.0}"
-                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
+                        curl -k -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
 
                         # Host для подписок: порт 8443, SNI cloudflare
                         host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":8443,\"path\":\"\",\"sni\":\"www.cloudflare.com\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
-                        curl -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
+                        curl -k -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
 
                         # Internal Squad — привязать inbound
-                        squads=$(curl -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "http://$domain_url/api/internal-squads") || true
+                        squads=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/internal-squads") || true
                         squad_uuid=$(echo "$squads" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null)
                         if [ -n "$squad_uuid" ]; then
-                            update_squad=$(curl -s -X PATCH -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/internal-squads" \
+                            update_squad=$(curl -k -s -X PATCH -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/internal-squads" \
                                 -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}") || true
                         fi
 
                         # API-токен для Subscription Page
-                        tok_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "http://$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
+                        tok_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
                         api_tok=$(echo "$tok_resp" | jq -r '.response.token // empty')
                         if [ -n "$api_tok" ]; then
                             sed -i "s|^REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_tok|" "$REMNAWAVE_DIR/.env"
@@ -738,8 +738,12 @@ COMPOSENODEEOF
     fi
 
     # Обновить .env бота (если ещё не создан, будет ниже)
-    # API — всегда localhost (бот и панель на одном сервере, без зависимости от DNS)
-    REMNAWAVE_API_URL="http://127.0.0.1:$PANEL_PORT"
+    # API панели — через HTTPS (Nginx), иначе ProxyCheckMiddleware отклоняет запросы
+    if [ -n "$PANEL_DOMAIN" ]; then
+        REMNAWAVE_API_URL="https://$PANEL_DOMAIN"
+    else
+        REMNAWAVE_API_URL="http://127.0.0.1:$PANEL_PORT"
+    fi
     REMNAWAVE_SUB_URL="http://127.0.0.1:$SUB_PORT"
     [ -n "$SUB_DOMAIN" ] && REMNAWAVE_SUB_URL="https://$SUB_DOMAIN"
 fi

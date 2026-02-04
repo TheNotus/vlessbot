@@ -14,8 +14,13 @@ def get_subscription_url(short_uuid: str, base_url: Optional[str] = None) -> str
         Полный URL вида {base_url}/sub/{short_uuid}
     """
     if base_url and base_url.strip():
-        return f"{base_url.rstrip('/')}/sub/{short_uuid}"
-    return f"https://[REMNAWAVE_DOMAIN]/sub/{short_uuid}"
+        out = f"{base_url.rstrip('/')}/sub/{short_uuid}"
+    else:
+        out = f"https://[REMNAWAVE_DOMAIN]/sub/{short_uuid}"
+    # #region agent log
+    _debug_log("get_subscription_url result", {"result": out[:100]}, "H3")
+    # #endregion
+    return out
 
 
 def extract_short_uuid(user_data: Optional[dict]) -> Optional[str]:
