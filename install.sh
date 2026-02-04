@@ -372,7 +372,8 @@ with open('docker-compose-prod.yml', 'w') as f:
     f.writelines(out)
 PYEOF
 
-    # Subscription Page (merge с основным compose)
+    # Subscription Page (merge с основным compose). REMNAWAVE_PANEL_URL и REMNAWAVE_API_TOKEN из .env,
+    # чтобы панель получала запросы через Nginx (X-Forwarded-Proto: https) и токен не перезаписывался пустым.
     cat > docker-compose-sub.yml << REMNAWAVESUB
 services:
   remnawave-subscription-page:
@@ -383,8 +384,6 @@ services:
     env_file: .env
     environment:
       - APP_PORT=3010
-      - REMNAWAVE_PANEL_URL=http://remnawave:3000
-      - REMNAWAVE_API_TOKEN=\${REMNAWAVE_API_TOKEN:-}
     ports:
       - "127.0.0.1:${SUB_PORT}:3010"
     networks:
@@ -393,6 +392,20 @@ services:
       remnawave:
         condition: service_healthy
 REMNAWAVESUB
+
+    # REMNAWAVE_PANEL_URL: через HTTPS (Nginx) — иначе ProxyCheckMiddleware панели отклоняет запросы Subscription Page
+    if [ -n "$PANEL_DOMAIN" ]; then
+        panel_url="https://$PANEL_DOMAIN"
+    else
+        panel_url="http://remnawave:3000"
+    fi
+    if grep -q "^REMNAWAVE_PANEL_URL=" .env 2>/dev/null; then
+        sed -i "s|^REMNAWAVE_PANEL_URL=.*|REMNAWAVE_PANEL_URL=$panel_url|" .env
+    else
+        echo "" >> .env
+        echo "# Subscription Page: URL панели (HTTPS через Nginx обязателен для ProxyCheck)" >> .env
+        echo "REMNAWAVE_PANEL_URL=$panel_url" >> .env
+    fi
 
     # REMNAWAVE_API_TOKEN — обязательно для Subscription Page. Панель → Settings → API Tokens
     if grep -q "^REMNAWAVE_API_TOKEN=" .env 2>/dev/null; then
