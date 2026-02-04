@@ -214,7 +214,7 @@ class VPNBot:
             reply_markup=reply_markup,
         )
         # Reply-клавиатура (кнопки снизу) — минимальный текст
-        await update.message.reply_text("\u200b", reply_markup=reply_kbd)
+        await update.message.reply_text(" ", reply_markup=reply_kbd)
 
     async def buy_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -542,7 +542,7 @@ class VPNBot:
         )
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="\u200b",
+            text=" ",
             reply_markup=self._get_main_reply_keyboard(),
         )
 
