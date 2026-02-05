@@ -6,6 +6,7 @@
 # Автоматизация: WEBHOOK_DOMAIN=bot.example.com CERTBOT_EMAIL=admin@example.com sudo ./install.sh
 # С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.domain.com (опционально)
 # Режим Remnawave без запроса: REMNAWAVE_PANEL_INSTALL=true|false; для ноды: REMNAWAVE_NODE_INSTALL=true SELFSTEAL_DOMAIN=node.example.com
+# Если первый пользователь панели уже создан — задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS для автоматического создания ноды и API-токена
 
 set -e
 # Ошибки и вывод команд установки показываются в консоли (без -qq и скрытия stderr)
@@ -615,13 +616,14 @@ services:
       - SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL
 COMPOSENODEEOF
 
-        # Дождаться готовности API панели через Nginx (HTTPS), иначе ProxyCheckMiddleware даёт Empty reply
+        # API панели — через локальный прокси 9080 (без cookie), иначе запросы режутся
+        domain_url="http://127.0.0.1:${REMNAWAVE_API_PROXY_PORT:-9080}"
+        api_host_header="Host: $PANEL_DOMAIN"
         echo "  Ожидание API панели..."
-        domain_url="https://$PANEL_DOMAIN"
         api_ready=""
         attempt=1
         while [ "$attempt" -le 20 ]; do
-            if curl -k -s -f --max-time 5 "$domain_url/api/auth/status" >/dev/null 2>&1; then
+            if curl -s -f --max-time 5 -H "$api_host_header" "$domain_url/api/auth/status" >/dev/null 2>&1; then
                 api_ready=1
                 break
             fi
@@ -633,34 +635,49 @@ COMPOSENODEEOF
             attempt=$((attempt + 1))
         done
 
-        # Регистрация и настройка через API (как в remnawave-reverse-proxy). Не выходить при сбое curl (set -e).
+        # Регистрация или логин, затем создание ноды и API-токена
         SUPERADMIN_USER=$(openssl rand -hex 4)
         SUPERADMIN_PASS=$(openssl rand -hex 12)
-        api_register() {
-            curl -k -s --connect-timeout 5 --max-time 15 -X POST "$domain_url/api/auth/register" \
-                -H "Content-Type: application/json" \
-                -d "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}"
-        }
-        resp=""
-        if [ -n "$api_ready" ]; then
-            resp=$(api_register) || true
-        fi
         token=""
-        if echo "$resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then
-            token=$(echo "$resp" | jq -r '.response.accessToken')
-        elif echo "$resp" | jq -e '.accessToken' >/dev/null 2>&1; then
-            token=$(echo "$resp" | jq -r '.accessToken')
+        if [ -n "$api_ready" ]; then
+            api_register() {
+                curl -s --connect-timeout 5 --max-time 15 -X POST "$domain_url/api/auth/register" \
+                    -H "$api_host_header" -H "Content-Type: application/json" \
+                    -d "{\"username\":\"$SUPERADMIN_USER\",\"password\":\"$SUPERADMIN_PASS\"}"
+            }
+            resp=$(api_register) || true
+            if echo "$resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then
+                token=$(echo "$resp" | jq -r '.response.accessToken')
+                REGISTRATION_SUCCEEDED="true"
+            elif echo "$resp" | jq -e '.accessToken' >/dev/null 2>&1; then
+                token=$(echo "$resp" | jq -r '.accessToken')
+                REGISTRATION_SUCCEEDED="true"
+            fi
+        fi
+        # Если регистрация не удалась — пробуем логин по REMNAWAVE_ADMIN_USER / REMNAWAVE_ADMIN_PASS
+        if [ -z "$token" ] || [ "$token" = "null" ]; then
+            if [ -n "$api_ready" ] && [ -n "${REMNAWAVE_ADMIN_USER:-}" ] && [ -n "${REMNAWAVE_ADMIN_PASS:-}" ]; then
+                echo "  Попытка входа по REMNAWAVE_ADMIN_USER..."
+                login_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST "$domain_url/api/auth/login" \
+                    -H "$api_host_header" -H "Content-Type: application/json" \
+                    -d "{\"username\":\"$REMNAWAVE_ADMIN_USER\",\"password\":\"$REMNAWAVE_ADMIN_PASS\"}") || true
+                if echo "$login_resp" | jq -e '.accessToken' >/dev/null 2>&1; then
+                    token=$(echo "$login_resp" | jq -r '.accessToken')
+                elif echo "$login_resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then
+                    token=$(echo "$login_resp" | jq -r '.response.accessToken')
+                fi
+                [ -n "$token" ] && echo "  Вход выполнен, создаём ноду и API-токен..."
+            fi
         fi
         if [ -z "$token" ] || [ "$token" = "null" ]; then
             echo -e "${YELLOW}  Регистрация через API не удалась (возможно, первый пользователь уже создан).${NC}"
-            echo -e "  ${YELLOW}Доведите настройку ноды по инструкции в конце установки.${NC}"
+            echo -e "  ${YELLOW}Задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS и перезапустите установку, либо настройте ноду по инструкции в конце.${NC}"
             NODE_MANUAL_SETUP_NEEDED="true"
         else
-            REGISTRATION_SUCCEEDED="true"
-            echo "  Регистрация в панели выполнена."
+            [ "$REGISTRATION_SUCCEEDED" = "true" ] && echo "  Регистрация в панели выполнена." || true
 
             # Публичный ключ для ноды
-            pubkey_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/keygen") || true
+            pubkey_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/keygen") || true
             PUBLIC_KEY=$(echo "$pubkey_resp" | jq -r '.response.pubKey // .pubKey // empty')
             if [ -z "$PUBLIC_KEY" ]; then
                 echo -e "${YELLOW}  Не удалось получить публичный ключ. Ноду нужно настроить вручную.${NC}"
@@ -668,19 +685,19 @@ COMPOSENODEEOF
                 sed -i "s|SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL|SECRET_KEY=$PUBLIC_KEY|" "$REMNAWAVE_DIR/docker-compose-node.yml"
 
                 # x25519 ключи и конфиг-профиль
-                keys_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/system/tools/x25519/generate") || true
+                keys_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/system/tools/x25519/generate") || true
                 PRIVATE_KEY=$(echo "$keys_resp" | jq -r '.response.keypairs[0].privateKey // empty')
                 if [ -z "$PRIVATE_KEY" ]; then
                     echo -e "${YELLOW}  Не удалось сгенерировать x25519. Профиль создайте в панели.${NC}"
                 else
                     # Удалить дефолтный профиль (если есть)
-                    profiles=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/config-profiles") || true
+                    profiles=$(curl -s --connect-timeout 5 --max-time 15 -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/config-profiles") || true
                     def_uuid=$(echo "$profiles" | jq -r '.response.configProfiles[] | select(.name=="Default-Profile") | .uuid' 2>/dev/null)
-                    [ -n "$def_uuid" ] && curl -k -s -X DELETE -H "Authorization: Bearer $token" "$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
+                    [ -n "$def_uuid" ] && curl -s -X DELETE -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/config-profiles/$def_uuid" >/dev/null || true
 
                     SHORT_ID=$(openssl rand -hex 8)
                     # Reality на 8443, dest — облако для маскировки (панель на 443 через host nginx)
-                    create_profile=$(curl -k -s --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+                    create_profile=$(curl -s --connect-timeout 5 --max-time 30 -X POST -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
                         "$domain_url/api/config-profiles" \
                         -d "{
                           \"name\": \"StealConfig\",
@@ -724,22 +741,22 @@ COMPOSENODEEOF
                     else
                         # Нода в панели (адрес 172.30.0.1 — host с точки зрения docker-сети)
                         node_payload="{\"name\":\"Node1\",\"address\":\"172.30.0.1\",\"port\":2222,\"configProfile\":{\"activeConfigProfileUuid\":\"$config_uuid\",\"activeInbounds\":[\"$inbound_uuid\"]},\"isTrafficTrackingActive\":false,\"trafficLimitBytes\":0,\"notifyPercent\":0,\"trafficResetDay\":31,\"excludedInbounds\":[],\"countryCode\":\"XX\",\"consumptionMultiplier\":1.0}"
-                        curl -k -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
+                        curl -s -X POST -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/nodes" -d "$node_payload" >/dev/null || true
 
                         # Host для подписок: порт 8443, SNI cloudflare
                         host_payload="{\"inbound\":{\"configProfileUuid\":\"$config_uuid\",\"configProfileInboundUuid\":\"$inbound_uuid\"},\"remark\":\"Steal\",\"address\":\"$SELFSTEAL_DOMAIN\",\"port\":8443,\"path\":\"\",\"sni\":\"www.cloudflare.com\",\"host\":\"\",\"fingerprint\":\"chrome\",\"allowInsecure\":false,\"isDisabled\":false,\"securityLayer\":\"DEFAULT\"}"
-                        curl -k -s -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
+                        curl -s -X POST -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/hosts" -d "$host_payload" >/dev/null || true
 
                         # Internal Squad — привязать inbound
-                        squads=$(curl -k -s --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $token" "$domain_url/api/internal-squads") || true
+                        squads=$(curl -s --connect-timeout 5 --max-time 15 -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/internal-squads") || true
                         squad_uuid=$(echo "$squads" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null)
                         if [ -n "$squad_uuid" ]; then
-                            update_squad=$(curl -k -s -X PATCH -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/internal-squads" \
+                            update_squad=$(curl -s -X PATCH -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/internal-squads" \
                                 -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}") || true
                         fi
 
                         # API-токен для Subscription Page
-                        tok_resp=$(curl -k -s --connect-timeout 5 --max-time 15 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
+                        tok_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
                         api_tok=$(echo "$tok_resp" | jq -r '.response.token // empty')
                         if [ -n "$api_tok" ]; then
                             sed -i "s|^REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_tok|" "$REMNAWAVE_DIR/.env"
@@ -1035,7 +1052,8 @@ echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo $DO
 echo ""
 if [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
 echo -e "${CYAN}--- Если нода не настроилась автоматически (было «Ожидание API панели» или «Регистрация через API не удалась») ---${NC}"
-echo -e "   Чтобы нода заработала, сделайте по шагам:"
+echo -e "   ${GREEN}Вариант А:${NC} Задайте переменные REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS (логин/пароль панели) и заново запустите установку — нода и API-токен создадутся автоматически."
+echo -e "   ${GREEN}Вариант Б:${NC} Настройте вручную по шагам:"
 echo -e "   ${YELLOW}1.${NC} Откройте панель по ссылке выше, войдите (или создайте первого пользователя при первом входе)."
 echo -e "   ${YELLOW}2.${NC} В панели: Nodes → Add Node. В форме укажите:"
 echo -e "      • Internal name — любое (например Node1)"
