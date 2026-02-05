@@ -28,6 +28,7 @@ var/
 wheels/
 *.egg-info/
 *.egg
+.pytest_cache
 
 # Database and logs
 *.db

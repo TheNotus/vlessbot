@@ -23,6 +23,7 @@ REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
 REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-}"
 REMNAWAVE_NODE_INSTALL="${REMNAWAVE_NODE_INSTALL:-false}"
 SELFSTEAL_DOMAIN="${SELFSTEAL_DOMAIN:-}"
+NODE_MANUAL_SETUP_NEEDED=""
 
 SCRIPT_DIR=""
 if [ -n "$0" ] && [ -f "$0" ] 2>/dev/null; then
@@ -605,7 +606,10 @@ COMPOSENODEEOF
                 api_ready=1
                 break
             fi
-            [ "$attempt" -eq 20 ] && echo -e "${RED}  API панели недоступен после 20 попыток. Настройте ноду вручную.${NC}"
+            if [ "$attempt" -eq 20 ]; then
+                echo -e "${RED}  API панели недоступен после 20 попыток. Настройте ноду вручную (инструкция в конце установки).${NC}"
+                NODE_MANUAL_SETUP_NEEDED="true"
+            fi
             sleep 10
             attempt=$((attempt + 1))
         done
@@ -630,7 +634,8 @@ COMPOSENODEEOF
         fi
         if [ -z "$token" ] || [ "$token" = "null" ]; then
             echo -e "${YELLOW}  Регистрация через API не удалась (возможно, первый пользователь уже создан).${NC}"
-            echo -e "  Создайте ноду вручную в панели и добавьте SECRET_KEY в $REMNAWAVE_DIR/docker-compose-node.yml"
+            echo -e "  ${YELLOW}Доведите настройку ноды по инструкции в конце установки.${NC}"
+            NODE_MANUAL_SETUP_NEEDED="true"
         else
             echo "  Регистрация в панели выполнена."
 
@@ -1011,6 +1016,16 @@ echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNA
 echo -e "     (строка REMNAWAVE_API_TOKEN=). Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"
 echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml restart remnawave-subscription-page${NC}"
 echo ""
+if [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
+echo -e "${CYAN}--- Если нода не настроилась автоматически (было «Ожидание API панели» или «Регистрация через API не удалась») ---${NC}"
+echo -e "   Чтобы нода заработала, сделайте по шагам:"
+echo -e "   ${YELLOW}1.${NC} Откройте панель по ссылке выше, войдите (или создайте первого пользователя при первом входе)."
+echo -e "   ${YELLOW}2.${NC} В панели: Nodes → Add Node. Создайте ноду и скопируйте её Public Key (это и есть SECRET_KEY для контейнера)."
+echo -e "   ${YELLOW}3.${NC} На сервере откройте: ${CYAN}sudo nano $REMNAWAVE_DIR/docker-compose-node.yml${NC}"
+echo -e "   ${YELLOW}4.${NC} Замените строку ${CYAN}SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL${NC} на ${CYAN}SECRET_KEY=<ваш_скопированный_ключ>${NC}"
+echo -e "   ${YELLOW}5.${NC} Перезапустите ноду: ${CYAN}cd $REMNAWAVE_DIR && sudo $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnanode${NC}"
+echo ""
+fi
 echo -e "${CYAN}Шаг 2. Файл настроек бота (.env)${NC}"
 echo -e "   Откройте: ${CYAN}sudo nano $INSTALL_DIR/.env${NC}"
 echo -e "   Заполните (где взять — в скобках):"
