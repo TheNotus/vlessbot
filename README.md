@@ -12,6 +12,7 @@ Telegram-бот для продажи VPN ключей с интеграцией
 - **Управление пользователями** — блокировка и отзыв ключей прямо из панели
 - Оплата через Yookassa (карты, СБП, ЮMoney)
 - Автоматическое создание пользователя в Remnawave
+- При сбое активации — клиенту показывается уникальный номер обращения (ERR-*) для поиска в логах
 - **Nginx** — reverse proxy с поддержкой SSL (Let's Encrypt)
 - Пробный период и реферальная программа
 - Команда `/stats` для администраторов
@@ -124,10 +125,11 @@ sudo ./install.sh
 ├── main.py              # Точка входа (webhook + админ-панель)
 ├── bot.py               # Telegram бот
 ├── admin_panel.py       # Веб-админ-панель
-├── webhook.py           # Webhook Yookassa
+├── webhook.py           # Webhook Yookassa (в т.ч. номера ошибок ERR-*)
 ├── cleanup_expired.py   # Очистка истёкших ключей (cron)
 ├── database.py          # SQLite: заказы, trial, blocked_users
 ├── config.py            # Конфигурация
+├── logging_config.py    # Логи в файл и консоль
 ├── remnawave_client.py  # API Remnawave
 ├── yookassa_client.py   # API Yookassa
 ├── utils.py
@@ -141,8 +143,26 @@ sudo ./install.sh
 sudo systemctl start vpn-bot      # Запуск
 sudo systemctl stop vpn-bot       # Остановка
 sudo systemctl restart vpn-bot    # Перезапуск
-sudo journalctl -u vpn-bot -f     # Логи
+sudo journalctl -u vpn-bot -f     # Логи (консоль)
 ```
+
+**Файловые логи** (для поиска по коду ошибки, см. ниже): при установке через `install.sh` — `/var/log/vpn-bot/vpn-bot.log`; при ручном запуске — каталог `logs/` в корне проекта, файл `vpn-bot.log`. Путь можно задать через переменную окружения `VPN_BOT_LOG_DIR`.
+
+## Ошибки активации подписки (поддержка)
+
+Если оплата прошла, но подписка не активировалась, пользователь получает сообщение с **номером обращения** вида `ERR-XXXXXXXX` (8 символов). По этому номеру можно найти причину в логах на сервере.
+
+**Как найти ошибку на сервере:**
+
+```bash
+# При установке через install.sh:
+grep "ERR-A1B2C3D4" /var/log/vpn-bot/vpn-bot.log
+
+# Или если бот запущен вручную из каталога проекта:
+grep "ERR-A1B2C3D4" logs/vpn-bot.log
+```
+
+Подставьте вместо `ERR-A1B2C3D4` номер, который указал клиент. В строке лога будут: `payment_id`, `telegram_id`, тариф и текст ошибки — этого достаточно, чтобы понять причину и исправить ситуацию.
 
 ## Безопасность
 

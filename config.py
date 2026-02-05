@@ -84,6 +84,14 @@ class Config:
     ])
 
     @classmethod
+    def _int_env(cls, key: str, default: int) -> int:
+        """Прочитать целое из env; при ошибке — default."""
+        try:
+            return int(os.getenv(key, str(default)))
+        except (ValueError, TypeError):
+            return default
+
+    @classmethod
     def from_env(cls) -> "Config":
         """Загрузка из переменных окружения"""
         from dotenv import load_dotenv
@@ -137,22 +145,22 @@ class Config:
             yookassa_secret_key=os.getenv("YOOKASSA_SECRET_KEY", ""),
             webhook_base_url=os.getenv("WEBHOOK_BASE_URL", "https://your-domain.com"),
             webhook_host=os.getenv("WEBHOOK_HOST", "0.0.0.0"),
-            webhook_port=int(os.getenv("WEBHOOK_PORT", "8000")),
-            trial_days=int(os.getenv("TRIAL_DAYS", "0")),
-            trial_data_limit_gb=int(os.getenv("TRIAL_DATA_LIMIT_GB", "0")),
-            referral_days=int(os.getenv("REFERRAL_DAYS", "0")),
+            webhook_port=cls._int_env("WEBHOOK_PORT", 8000),
+            trial_days=cls._int_env("TRIAL_DAYS", 0),
+            trial_data_limit_gb=cls._int_env("TRIAL_DATA_LIMIT_GB", 0),
+            referral_days=cls._int_env("REFERRAL_DAYS", 0),
             vpn_name=os.getenv("VPN_NAME", "RealityVPN"),
             keyboard_info=(os.getenv("KEYBOARD_INFO") or "Ниже доступны кнопки для выбора тарифа, подписки и других действий.").replace("\\n", "\n"),
             support_link=(os.getenv("SUPPORT_LINK") or "").strip(),
             support_button_text=os.getenv("SUPPORT_BUTTON_TEXT", "НАПИСАТЬ"),
             welcome_message=(os.getenv("WELCOME_MESSAGE") or "").replace("\\n", "\n"),
             main_menu_info=(os.getenv("MAIN_MENU_INFO") or "").replace("\\n", "\n"),
-            expired_cleanup_days=int(os.getenv("EXPIRED_CLEANUP_DAYS", "7")),
+            expired_cleanup_days=cls._int_env("EXPIRED_CLEANUP_DAYS", 7),
             forced_channel_enabled=os.getenv("FORCED_CHANNEL_ENABLED", "false").lower() in ("1", "true", "yes"),
             forced_channel_id=os.getenv("FORCED_CHANNEL_ID") or None,
             forced_channel_username=os.getenv("FORCED_CHANNEL_USERNAME") or None,
             admin_panel_enabled=os.getenv("ADMIN_PANEL_ENABLED", "false").lower() in ("1", "true", "yes", "enable"),
-            admin_panel_port=int(os.getenv("ADMIN_PANEL_PORT", "8080")),
+            admin_panel_port=cls._int_env("ADMIN_PANEL_PORT", 8080),
             admin_panel_password=os.getenv("ADMIN_PANEL_PASSWORD", ""),
             remnawave=remnawave,
             plans=plans,

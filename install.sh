@@ -395,17 +395,13 @@ services:
         condition: service_healthy
 REMNAWAVESUB
 
-    # REMNAWAVE_PANEL_URL: через HTTPS (Nginx) — иначе ProxyCheckMiddleware панели отклоняет запросы Subscription Page
-    if [ -n "$PANEL_DOMAIN" ]; then
-        panel_url="https://$PANEL_DOMAIN"
-    else
-        panel_url="http://remnawave:3000"
-    fi
+    # REMNAWAVE_PANEL_URL: внутренний URL панели (Subscription Page в той же Docker-сети) — без Nginx и cookie, без 502
+    panel_url="http://remnawave:3000"
     if grep -q "^REMNAWAVE_PANEL_URL=" .env 2>/dev/null; then
         sed -i "s|^REMNAWAVE_PANEL_URL=.*|REMNAWAVE_PANEL_URL=$panel_url|" .env
     else
         echo "" >> .env
-        echo "# Subscription Page: URL панели (HTTPS через Nginx обязателен для ProxyCheck)" >> .env
+        echo "# Subscription Page: URL панели (внутри Docker — remnawave:3000)" >> .env
         echo "REMNAWAVE_PANEL_URL=$panel_url" >> .env
     fi
 
@@ -519,6 +515,28 @@ NGINXSELFSTEALEOF
         echo "  SelfSteal (заглушка): https://$SELFSTEAL_DOMAIN"
         install_selfsteal_template
     fi
+
+    # Локальный прокси для API панели (только 127.0.0.1): панель отдаёт ответ только при Host и X-Forwarded-Proto
+    REMNAWAVE_API_PROXY_PORT="${REMNAWAVE_API_PROXY_PORT:-9080}"
+    PANEL_API_HOST="${PANEL_DOMAIN:-localhost}"
+    cat > /etc/nginx/sites-available/remnawave-panel-api-local << NGINXAPILOCALEOF
+server {
+    listen 127.0.0.1:${REMNAWAVE_API_PROXY_PORT};
+    server_name _;
+    location / {
+        proxy_pass http://127.0.0.1:${PANEL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host ${PANEL_API_HOST};
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+NGINXAPILOCALEOF
+    ln -sf /etc/nginx/sites-available/remnawave-panel-api-local /etc/nginx/sites-enabled/ 2>/dev/null || true
+
     nginx -t && systemctl reload nginx || true
 
     # ---------- Панель + нода: панель по обычному HTTPS (443), нода Reality на 8443 ----------
@@ -745,12 +763,8 @@ COMPOSENODEEOF
     fi
 
     # Обновить .env бота (если ещё не создан, будет ниже)
-    # API панели — через HTTPS (Nginx), иначе ProxyCheckMiddleware отклоняет запросы
-    if [ -n "$PANEL_DOMAIN" ]; then
-        REMNAWAVE_API_URL="https://$PANEL_DOMAIN"
-    else
-        REMNAWAVE_API_URL="http://127.0.0.1:$PANEL_PORT"
-    fi
+    # API панели — через локальный nginx-прокси (Host + X-Forwarded-Proto), только 127.0.0.1
+    REMNAWAVE_API_URL="http://127.0.0.1:${REMNAWAVE_API_PROXY_PORT:-9080}"
     REMNAWAVE_SUB_URL="http://127.0.0.1:$SUB_PORT"
     [ -n "$SUB_DOMAIN" ] && REMNAWAVE_SUB_URL="https://$SUB_DOMAIN"
 fi
@@ -1040,6 +1054,7 @@ echo -e "   • TELEGRAM_BOT_TOKEN — токен от @BotFather в Telegram"
 echo -e "   • ADMIN_IDS — ваш Telegram ID (число, можно узнать у @userinfobot)"
 echo -e "   • YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY — из личного кабинета ЮKassa"
 echo -e "   • REMNAWAVE_USERNAME и REMNAWAVE_PASSWORD — логин и пароль из шага 1"
+echo -e "   • REMNAWAVE_API_URL — для панели на этом сервере оставьте ${CYAN}http://127.0.0.1:9080${NC} (локальный прокси API)"
 echo -e "   • REMNAWAVE_SQUAD_UUID — UUID группы (Internal Squad) из Remnawave"
 echo -e "   • REMNAWAVE_SUBSCRIPTION_URL — уже подставлен; если меняли домен — поправьте"
 echo -e "   Сохранить: Ctrl+O, Enter. Выход: Ctrl+X"

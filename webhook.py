@@ -1,6 +1,7 @@
 """Webhook сервер для приёма уведомлений Yookassa"""
 import asyncio
 import logging
+import uuid
 from typing import Optional
 
 import uvicorn
@@ -158,19 +159,31 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
                 logger.error(f"Ошибка отправки в Telegram: {e}")
 
     except RemnawaveError as e:
-        logger.error(f"Ошибка Remnawave при создании пользователя: {e}")
-        await db.update_order_status(payment_id, "failed")
-        await _notify_payment_failure(telegram_id, plan.name, str(e))
+        error_id = f"ERR-{uuid.uuid4().hex[:8].upper()}"
+        logger.error(
+            "[%s] Ошибка активации подписки (Remnawave): payment_id=%s, telegram_id=%s, plan=%s, error=%s",
+            error_id, payment_id, telegram_id, plan.name, e,
+        )
+        order_again = await db.get_order_by_payment(payment_id)
+        if not order_again or order_again.status != "succeeded":
+            await db.update_order_status(payment_id, "failed")
+            await _notify_payment_failure(telegram_id, plan.name, str(e), error_id)
     except Exception as e:
-        logger.exception(f"Ошибка обработки платежа {payment_id}")
-        await db.update_order_status(payment_id, "failed")
-        await _notify_payment_failure(telegram_id, plan.name, str(e))
+        error_id = f"ERR-{uuid.uuid4().hex[:8].upper()}"
+        logger.exception(
+            "[%s] Ошибка активации подписки: payment_id=%s, telegram_id=%s, plan=%s, error=%s",
+            error_id, payment_id, telegram_id, plan.name, e,
+        )
+        order_again = await db.get_order_by_payment(payment_id)
+        if not order_again or order_again.status != "succeeded":
+            await db.update_order_status(payment_id, "failed")
+            await _notify_payment_failure(telegram_id, plan.name, str(e), error_id)
 
 
 async def _notify_payment_failure(
-    telegram_id: int, plan_name: str, error_msg: str
+    telegram_id: int, plan_name: str, error_msg: str, error_id: str
 ) -> None:
-    """Уведомить пользователя об ошибке обработки платежа"""
+    """Уведомить пользователя об ошибке обработки платежа (error_id показывается клиенту для обращения в поддержку)."""
     if not telegram_bot:
         return
     try:
@@ -179,7 +192,8 @@ async def _notify_payment_failure(
             text=(
                 "❌ *Оплата получена, но возникла ошибка при активации подписки.*\n\n"
                 f"Тариф: {plan_name}\n\n"
-                "Обратитесь в поддержку — мы исправим ситуацию в ближайшее время."
+                f"*Номер обращения:* `{error_id}`\n\n"
+                "Обратитесь в поддержку и укажите этот номер — мы исправим ситуацию в ближайшее время."
             ),
             parse_mode="Markdown",
         )

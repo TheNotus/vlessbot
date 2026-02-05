@@ -175,9 +175,11 @@ cd ~/remnawave
     ports:
       - "8081:3000"
     environment:
-      - REMNAWAVE_PANEL_URL=https://panel.example.com
-      - REMNAWAVE_PANEL_TOKEN=your_api_token
+      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - REMNAWAVE_API_TOKEN=your_api_token
 ```
+
+Если панель и Subscription Page в одном docker-compose, используйте `REMNAWAVE_PANEL_URL=http://remnawave:3000` (без Nginx и cookie — иначе 502 и «Expected object, received string»). Токен: Remnawave Panel → Settings → API Tokens.
 
 > Токен можно получить через API после логина или использовать логин/пароль, если Subscription Page это поддерживает. См. документацию: https://docs.rw/docs/install/remnawave-subscription-page
 
@@ -459,6 +461,64 @@ REFERRAL_DAYS=7
 
 ---
 
+## Уже развёрнутый сервер: локальный прокси API панели
+
+Если бот при оплате пишет в логах «Remote end closed connection without response» или «Expecting value: line 1 column 1» при обращении к панели Remnawave, панель не отвечает на прямые запросы по `http://127.0.0.1:8080`. Нужно пускать запросы бота через локальный nginx-прокси (порт 9080), который подставляет заголовки `Host` и `X-Forwarded-Proto: https`.
+
+**Шаг 1.** Подставьте свой домен панели и порт панели (обычно 8080). Создайте конфиг nginx:
+
+```bash
+sudo tee /etc/nginx/sites-available/remnawave-panel-api-local << 'EOF'
+server {
+    listen 127.0.0.1:9080;
+    server_name _;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host ВАШ_ДОМЕН_ПАНЕЛИ;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+```
+
+Замените `ВАШ_ДОМЕН_ПАНЕЛИ` на домен панели (например `x7k2m.apollonvpn.ru`). Если панель без домена — укажите `localhost`.
+
+**Шаг 2.** Включите конфиг и перезагрузите nginx:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/remnawave-panel-api-local /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Шаг 3.** В `.env` бота задайте URL API через прокси:
+
+```bash
+sudo nano /opt/vpn-bot/.env
+```
+
+Строка должна быть:
+
+```env
+REMNAWAVE_API_URL=http://127.0.0.1:9080
+```
+
+Сохраните (Ctrl+O, Enter), выйдите (Ctrl+X).
+
+**Шаг 4.** Перезапустите бота:
+
+```bash
+sudo systemctl restart vpn-bot
+```
+
+Проверка: `curl -s http://127.0.0.1:9080/api/auth/status` должен вернуть JSON (а не пустой ответ).
+
+---
+
 ## Решение проблем
 
 | Проблема | Решение |
@@ -469,6 +529,7 @@ REFERRAL_DAYS=7
 | Подписка не приходит | Проверьте логи бота и webhook, настройки Yookassa webhook |
 | Реферальные дни не начисляются | Реферер должен иметь активного пользователя в Remnawave (купленную подписку) |
 | **Панель Remnawave не открывается (502)** | Проверьте `docker ps` (должен быть контейнер `remnawave`) и порт 8080: `ss -tlnp`. Если контейнера нет: `cd /opt/remnawave && sudo docker compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d` (или `docker-compose` вместо `docker compose`) |
+| **Subscription Page 502 или «Expected object, received string»** | В `/opt/remnawave/.env` задайте `REMNAWAVE_PANEL_URL=http://remnawave:3000` (доступ внутри Docker) и `REMNAWAVE_API_TOKEN=` (токен из панели → Settings → API Tokens). Затем: `cd /opt/remnawave && sudo docker-compose -f docker-compose-prod.yml -f docker-compose-sub.yml up -d --force-recreate remnawave-subscription-page` |
 | certbot / nginx: «No such file or directory» | Удалите битую симлинку в `sites-enabled`: `sudo rm /etc/nginx/sites-enabled/имя_файла.conf`, затем `sudo nginx -t` |
 
 ---

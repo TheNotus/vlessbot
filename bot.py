@@ -259,6 +259,12 @@ class VPNBot:
                 metadata=metadata,
             )
 
+            confirmation_url = payment.get("confirmation_url")
+            if not confirmation_url:
+                logger.error("Yookassa не вернула confirmation_url: %s", payment)
+                await query.edit_message_text("❌ Ошибка при создании платежа. Попробуйте позже.")
+                return
+
             # Сохраняем заказ в БД
             await self.db.create_order(
                 payment_id=payment["id"],
@@ -274,7 +280,7 @@ class VPNBot:
                 [
                     InlineKeyboardButton(
                         "💳 Оплатить",
-                        url=payment["confirmation_url"],
+                        url=confirmation_url,
                     )
                 ],
                 [InlineKeyboardButton("◀️ Назад", callback_data="back")],
@@ -294,10 +300,8 @@ class VPNBot:
             )
 
         except Exception as e:
-            logger.exception("Ошибка создания платежа")
-            await query.edit_message_text(
-                f"❌ Ошибка при создании платежа. Попробуйте позже.\n\n{str(e)}"
-            )
+            logger.exception("Ошибка создания платежа: %s", e)
+            await query.edit_message_text("❌ Ошибка при создании платежа. Попробуйте позже.")
 
     async def my_subscription_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -472,9 +476,9 @@ class VPNBot:
                 ]),
             )
         except RemnawaveError as e:
-            logger.exception("Ошибка создания trial")
+            logger.exception("Ошибка создания trial: %s", e)
             await query.edit_message_text(
-                f"❌ Ошибка: {e}. Возможно, пользователь уже существует.",
+                "❌ Не удалось активировать пробный период. Возможно, вы уже использовали его ранее.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("◀️ Назад", callback_data="back")]
                 ]),

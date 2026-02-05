@@ -17,9 +17,6 @@ def get_subscription_url(short_uuid: str, base_url: Optional[str] = None) -> str
         out = f"{base_url.rstrip('/')}/sub/{short_uuid}"
     else:
         out = f"https://[REMNAWAVE_DOMAIN]/sub/{short_uuid}"
-    # #region agent log
-    _debug_log("get_subscription_url result", {"result": out[:100]}, "H3")
-    # #endregion
     return out
 
 

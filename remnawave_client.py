@@ -1,4 +1,5 @@
 """Клиент API Remnawave для управления пользователями VPN"""
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,21 @@ import requests
 from config import PlanConfig, RemnawaveConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_json(response: requests.Response) -> Optional[dict]:
+    """Безопасно распарсить JSON из ответа; при ошибке — None или RemnawaveError для 4xx/5xx."""
+    if not response.text or not response.text.strip():
+        return None
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("Ответ панели не JSON: %s", e)
+        raise RemnawaveError(
+            f"Ответ панели не JSON: {response.text[:200]}",
+            status_code=response.status_code,
+            response=None,
+        )
 
 T = TypeVar("T")
 
@@ -82,12 +98,14 @@ class RemnawaveClient:
 
         if response.status_code != 200:
             raise RemnawaveError(
-                f"Ошибка авторизации: {response.text}",
+                f"Ошибка авторизации: {response.text[:500] if response.text else 'пустой ответ'}",
                 status_code=response.status_code,
-                response=response.json() if response.text else None,
+                response=_safe_json(response),
             )
 
-        data = response.json()
+        data = _safe_json(response)
+        if not data:
+            raise RemnawaveError("Пустой ответ панели при логине", status_code=response.status_code, response=None)
         self._token = data.get("accessToken") or data.get("access_token")
         if not self._token:
             raise RemnawaveError("Токен не найден в ответе", response=data)
@@ -124,12 +142,12 @@ class RemnawaveClient:
 
         if response.status_code >= 400:
             raise RemnawaveError(
-                f"Ошибка API: {response.text}",
+                f"Ошибка API: {response.text[:500] if response.text else 'пустой ответ'}",
                 status_code=response.status_code,
-                response=response.json() if response.text else None,
+                response=_safe_json(response),
             )
 
-        return response.json() if response.text else {}
+        return _safe_json(response) or {}
 
     def get_internal_squads(self) -> list[dict]:
         """Получить список Internal Squads (групп подписок)"""
