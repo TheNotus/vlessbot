@@ -24,6 +24,7 @@ REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-}"
 REMNAWAVE_NODE_INSTALL="${REMNAWAVE_NODE_INSTALL:-false}"
 SELFSTEAL_DOMAIN="${SELFSTEAL_DOMAIN:-}"
 NODE_MANUAL_SETUP_NEEDED=""
+REGISTRATION_SUCCEEDED=""
 
 SCRIPT_DIR=""
 if [ -n "$0" ] && [ -f "$0" ] 2>/dev/null; then
@@ -637,6 +638,7 @@ COMPOSENODEEOF
             echo -e "  ${YELLOW}Доведите настройку ноды по инструкции в конце установки.${NC}"
             NODE_MANUAL_SETUP_NEEDED="true"
         else
+            REGISTRATION_SUCCEEDED="true"
             echo "  Регистрация в панели выполнена."
 
             # Публичный ключ для ноды
@@ -995,11 +997,11 @@ echo -e "${CYAN}Шаг 1. Remnawave Panel (панель VPN)${NC}"
 if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ -n "$PANEL_DOMAIN" ] && [ -n "$COOKIES_R1" ] && [ -n "$COOKIES_R2" ]; then
 echo -e "   Панель по ссылке с секретом (сохраните):"
 echo -e "   ${YELLOW}https://${PANEL_DOMAIN}/auth/login?${COOKIES_R1}=${COOKIES_R2}${NC}"
-if [ -n "$SUPERADMIN_USER" ] && [ -n "$SUPERADMIN_PASS" ]; then
+if [ "$REGISTRATION_SUCCEEDED" = "true" ] && [ -n "$SUPERADMIN_USER" ] && [ -n "$SUPERADMIN_PASS" ]; then
 echo -e "   Логин:  ${CYAN}${SUPERADMIN_USER}${NC}"
 echo -e "   Пароль: ${CYAN}${SUPERADMIN_PASS}${NC}"
 else
-echo -e "   Логин и пароль — учётные данные, созданные при первом входе в панель."
+echo -e "   Логин и пароль — учётные данные, созданные при первом входе в панель (или при ручной регистрации)."
 fi
 elif [ -n "$PANEL_DOMAIN" ]; then
 echo -e "   Откройте в браузере: ${YELLOW}https://${PANEL_DOMAIN}${NC}"
@@ -1010,6 +1012,7 @@ fi
 [ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • Создайте учётную запись администратора (логин и пароль — запомните)"
 [ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && echo -e "   • Нода и заглушка SelfSteal: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (уже установлены скриптом)"
 [ -n "$SELFSTEAL_DOMAIN" ] && [ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • SelfSteal домен для ноды: ${YELLOW}$SELFSTEAL_DOMAIN${NC} (ноду настройте скриптом remnawave-reverse-proxy)"
+[ "$REMNAWAVE_NODE_INSTALL" != "true" ] && echo -e "   • Если позже добавите ноду на этом же сервере (Nodes → Add Node): Domain or IP: ${CYAN}172.30.0.1${NC}, Node Port: ${CYAN}2222${NC}; SECRET_KEY скопируйте из формы в docker-compose ноды."
 echo -e "   • Создайте Internal Squad (группу подписок) и привяжите ноду, если ещё не сделано"
 echo -e "   • Зайдите в Settings → API Tokens → создайте токен"
 echo -e "   • Вставьте токен в файл: ${CYAN}sudo nano $REMNAWAVE_DIR/.env${NC}"
@@ -1020,7 +1023,11 @@ if [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
 echo -e "${CYAN}--- Если нода не настроилась автоматически (было «Ожидание API панели» или «Регистрация через API не удалась») ---${NC}"
 echo -e "   Чтобы нода заработала, сделайте по шагам:"
 echo -e "   ${YELLOW}1.${NC} Откройте панель по ссылке выше, войдите (или создайте первого пользователя при первом входе)."
-echo -e "   ${YELLOW}2.${NC} В панели: Nodes → Add Node. Создайте ноду и скопируйте её Public Key (это и есть SECRET_KEY для контейнера)."
+echo -e "   ${YELLOW}2.${NC} В панели: Nodes → Add Node. В форме укажите:"
+echo -e "      • Internal name — любое (например Node1)"
+echo -e "      • Domain or IP: ${CYAN}172.30.0.1${NC} (всё на одном сервере — так панель достучится до ноды)"
+echo -e "      • Node Port: ${CYAN}2222${NC}"
+echo -e "      Скопируйте Secret Key (SECRET_KEY) из формы — понадобится в п.4."
 echo -e "   ${YELLOW}3.${NC} На сервере откройте: ${CYAN}sudo nano $REMNAWAVE_DIR/docker-compose-node.yml${NC}"
 echo -e "   ${YELLOW}4.${NC} Замените строку ${CYAN}SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL${NC} на ${CYAN}SECRET_KEY=<ваш_скопированный_ключ>${NC}"
 echo -e "   ${YELLOW}5.${NC} Перезапустите ноду: ${CYAN}cd $REMNAWAVE_DIR && sudo $DOCKER_COMPOSE_CMD -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnanode${NC}"
