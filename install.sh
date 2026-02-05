@@ -126,6 +126,44 @@ print('  БД в порядке')
         echo "  Добавлено REMNAWAVE_API_TOKEN= в $REMNAWAVE_DIR/.env — заполните и перезапустите Subscription Page"
     fi
 
+    # При заданных REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS — создать API-токен и при необходимости подставить SECRET_KEY ноды (без повторной полной установки)
+    if [ -n "${REMNAWAVE_ADMIN_USER:-}" ] && [ -n "${REMNAWAVE_ADMIN_PASS:-}" ] && [ -f "$REMNAWAVE_DIR/.env" ]; then
+        PANEL_DOMAIN_UPDATE=$(grep -E "^FRONT_END_DOMAIN=" "$REMNAWAVE_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | head -1)
+        if [ -n "$PANEL_DOMAIN_UPDATE" ] && [ "$PANEL_DOMAIN_UPDATE" != "*" ]; then
+            domain_url="http://127.0.0.1:9080"
+            api_host_header="Host: $PANEL_DOMAIN_UPDATE"
+            if curl -s -f --max-time 5 -H "$api_host_header" "$domain_url/api/auth/status" >/dev/null 2>&1; then
+                login_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST "$domain_url/api/auth/login" \
+                    -H "$api_host_header" -H "Content-Type: application/json" \
+                    -d "{\"username\":\"$REMNAWAVE_ADMIN_USER\",\"password\":\"$REMNAWAVE_ADMIN_PASS\"}") || true
+                token=""
+                if echo "$login_resp" | jq -e '.accessToken' >/dev/null 2>&1; then token=$(echo "$login_resp" | jq -r '.accessToken'); fi
+                if [ -z "$token" ] && echo "$login_resp" | jq -e '.response.accessToken' >/dev/null 2>&1; then token=$(echo "$login_resp" | jq -r '.response.accessToken'); fi
+                if [ -n "$token" ]; then
+                    echo "  Вход в панель выполнен, создаём API-токен и при необходимости обновляем ноду..."
+                    tok_resp=$(curl -s --connect-timeout 5 --max-time 15 -X POST -H "$api_host_header" -H "Authorization: Bearer $token" -H "Content-Type: application/json" "$domain_url/api/tokens" -d '{"tokenName":"subscription-page"}') || true
+                    api_tok=$(echo "$tok_resp" | jq -r '.response.token // empty')
+                    if [ -n "$api_tok" ]; then
+                        grep -q "^REMNAWAVE_API_TOKEN=" "$REMNAWAVE_DIR/.env" 2>/dev/null && sed -i "s|^REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_tok|" "$REMNAWAVE_DIR/.env" || echo "REMNAWAVE_API_TOKEN=$api_tok" >> "$REMNAWAVE_DIR/.env"
+                        echo "  REMNAWAVE_API_TOKEN записан в $REMNAWAVE_DIR/.env"
+                    fi
+                    if [ -f "$REMNAWAVE_DIR/docker-compose-node.yml" ] && grep -q "REPLACE_PUBLIC_KEY_FROM_PANEL" "$REMNAWAVE_DIR/docker-compose-node.yml" 2>/dev/null; then
+                        pubkey_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "$api_host_header" -H "Authorization: Bearer $token" "$domain_url/api/keygen") || true
+                        PUBLIC_KEY=$(echo "$pubkey_resp" | jq -r '.response.pubKey // .pubKey // empty')
+                        if [ -n "$PUBLIC_KEY" ]; then
+                            sed -i "s|SECRET_KEY=REPLACE_PUBLIC_KEY_FROM_PANEL|SECRET_KEY=$PUBLIC_KEY|" "$REMNAWAVE_DIR/docker-compose-node.yml"
+                            echo "  SECRET_KEY ноды подставлен в docker-compose-node.yml"
+                        fi
+                    fi
+                    DOCKER_COMPOSE_UPDATE="docker compose"
+                    docker compose version &>/dev/null || DOCKER_COMPOSE_UPDATE="docker-compose"
+                    (cd "$REMNAWAVE_DIR" 2>/dev/null && $DOCKER_COMPOSE_UPDATE -f docker-compose-prod.yml -f docker-compose-sub.yml -f docker-compose-node.yml up -d remnanode) 2>/dev/null || true
+                    docker restart remnawave-subscription-page 2>/dev/null || true
+                fi
+            fi
+        fi
+    fi
+
     # Разрешить перезапуск из админ-панели (если ещё нет)
     if [ ! -f /etc/sudoers.d/vpn-bot-restart ]; then
         echo "$BOT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart $SERVICE_NAME" > /etc/sudoers.d/vpn-bot-restart
@@ -671,7 +709,7 @@ COMPOSENODEEOF
         fi
         if [ -z "$token" ] || [ "$token" = "null" ]; then
             echo -e "${YELLOW}  Регистрация через API не удалась (возможно, первый пользователь уже создан).${NC}"
-            echo -e "  ${YELLOW}Задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS и перезапустите установку, либо настройте ноду по инструкции в конце.${NC}"
+            echo -e "  ${YELLOW}Задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS и запустите обновление (sudo ./install.sh), либо настройте ноду по инструкции в конце.${NC}"
             NODE_MANUAL_SETUP_NEEDED="true"
         else
             [ "$REGISTRATION_SUCCEEDED" = "true" ] && echo "  Регистрация в панели выполнена." || true
@@ -1052,7 +1090,7 @@ echo -e "   • Перезапустите: ${CYAN}cd $REMNAWAVE_DIR && sudo $DO
 echo ""
 if [ "$REMNAWAVE_NODE_INSTALL" = "true" ]; then
 echo -e "${CYAN}--- Если нода не настроилась автоматически (было «Ожидание API панели» или «Регистрация через API не удалась») ---${NC}"
-echo -e "   ${GREEN}Вариант А:${NC} Задайте переменные REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS (логин/пароль панели) и заново запустите установку — нода и API-токен создадутся автоматически."
+echo -e "   ${GREEN}Вариант А:${NC} Задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS и запустите обновление: ${CYAN}REMNAWAVE_ADMIN_USER=логин REMNAWAVE_ADMIN_PASS=пароль sudo ./install.sh${NC} — API-токен и при необходимости SECRET_KEY ноды подставятся автоматически."
 echo -e "   ${GREEN}Вариант Б:${NC} Настройте вручную по шагам:"
 echo -e "   ${YELLOW}1.${NC} Откройте панель по ссылке выше, войдите (или создайте первого пользователя при первом входе)."
 echo -e "   ${YELLOW}2.${NC} В панели: Nodes → Add Node. В форме укажите:"
