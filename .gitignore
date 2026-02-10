@@ -7,6 +7,7 @@
 venv/
 .venv/
 env/
+remnawave-reverse-proxy-main
 
 # Python
 __pycache__/

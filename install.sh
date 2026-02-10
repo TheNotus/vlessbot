@@ -5,8 +5,8 @@
 # Явно: sudo ./install.sh update  или  sudo ./install.sh install
 # Автоматизация: WEBHOOK_DOMAIN=bot.example.com CERTBOT_EMAIL=admin@example.com sudo ./install.sh
 # С панелью: PANEL_DOMAIN=panel.example.com SUB_DOMAIN=sub.domain.com (опционально)
-# Режим Remnawave без запроса: REMNAWAVE_PANEL_INSTALL=true|false; для ноды: REMNAWAVE_NODE_INSTALL=true SELFSTEAL_DOMAIN=node.example.com
-# Если первый пользователь панели уже создан — задайте REMNAWAVE_ADMIN_USER и REMNAWAVE_ADMIN_PASS для автоматического создания ноды и API-токена
+# Режим Remnawave (как remnawave-reverse-proxy): REMNAWAVE_PANEL_INSTALL=true|false, REMNAWAVE_NODE_INSTALL=true, REMNAWAVE_ADD_NODE=true
+# Данные: PANEL_DOMAIN, SUB_DOMAIN, SELFSTEAL_DOMAIN; для автоматизации ноды/токена: REMNAWAVE_ADMIN_USER, REMNAWAVE_ADMIN_PASS
 
 set -e
 # Ошибки и вывод команд установки показываются в консоли (без -qq и скрытия stderr)
@@ -23,6 +23,7 @@ REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
 # Remnawave: выбор пользователя (1–4) или переменные REMNAWAVE_PANEL_INSTALL=true|false, REMNAWAVE_NODE_INSTALL=true|false
 REMNAWAVE_PANEL_INSTALL="${REMNAWAVE_PANEL_INSTALL:-}"
 REMNAWAVE_NODE_INSTALL="${REMNAWAVE_NODE_INSTALL:-false}"
+REMNAWAVE_ADD_NODE="${REMNAWAVE_ADD_NODE:-false}"
 SELFSTEAL_DOMAIN="${SELFSTEAL_DOMAIN:-}"
 NODE_MANUAL_SETUP_NEEDED=""
 REGISTRATION_SUCCEEDED=""
@@ -188,30 +189,40 @@ echo "Директория: $INSTALL_DIR | Пользователь: $BOT_USER"
 echo -e "  (Обновление при следующем запуске: ${CYAN}sudo ./install.sh${NC})"
 echo ""
 
-# Выбор Remnawave (как в https://github.com/eGamesAPI/remnawave-reverse-proxy)
-if [ -z "$REMNAWAVE_PANEL_INSTALL" ]; then
-    echo -e "${CYAN}Установить Remnawave на этот сервер?${NC}"
+# Выбор Remnawave — как в remnawave-reverse-proxy (Install Remnawave Components)
+if [ -z "$REMNAWAVE_PANEL_INSTALL" ] && [ -z "$REMNAWAVE_ADD_NODE" ]; then
+    echo -e "${CYAN}Установка компонентов Remnawave (как в remnawave-reverse-proxy):${NC}"
     echo "  1) Нет — только VPN Bot"
     echo "  2) Панель и нода на одном сервере (панель + Xray-нода + заглушка SelfSteal)"
     echo "  3) Только панель Remnawave"
-    echo "  4) Только нода Remnawave (бот не ставим; ноду ставьте скриптом remnawave-reverse-proxy)"
-    read -r -p "Выбор (1–4) [1]: " REMNAWAVE_CHOICE </dev/tty
+    echo "  4) Добавить ноду в панель (запускать на сервере с уже установленной панелью)"
+    echo "  5) Только нода Remnawave (на другом сервере; рекомендуется скрипт remnawave-reverse-proxy)"
+    read -r -p "Выбор (1–5) [1]: " REMNAWAVE_CHOICE </dev/tty
     REMNAWAVE_CHOICE="${REMNAWAVE_CHOICE:-1}"
     case "$REMNAWAVE_CHOICE" in
-        2) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=true ;;
-        3) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=false ;;
-        4) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=true ;;
-        *) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=false ;;
+        2) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=true; REMNAWAVE_ADD_NODE=false ;;
+        3) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=false; REMNAWAVE_ADD_NODE=false ;;
+        4) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=false; REMNAWAVE_ADD_NODE=true ;;
+        5) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=true; REMNAWAVE_ADD_NODE=false ;;
+        *) REMNAWAVE_PANEL_INSTALL=false; REMNAWAVE_NODE_INSTALL=false; REMNAWAVE_ADD_NODE=false ;;
     esac
     echo ""
 fi
 
-# Режим «только нода» — выводим инструкцию и выходим (бот не ставим)
+# Режим «только нода» (5) — предлагаем скрипт remnawave-reverse-proxy или продолжить установку бота
 if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ "$REMNAWAVE_PANEL_INSTALL" != "true" ]; then
-    echo -e "${YELLOW}Режим «Только нода»: этот скрипт ставит VPN Bot и опционально панель.${NC}"
-    echo "Для установки только ноды Remnawave (Xray, SelfSteal) используйте:"
-    echo -e "  ${CYAN}bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)${NC}"
-    echo ""
+    echo -e "${YELLOW}Режим «Только нода»: установка только Xray-ноды Remnawave (SelfSteal).${NC}"
+    RR_SCRIPT=""
+    [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/remnawave-reverse-proxy-main/install_remnawave.sh" ] && RR_SCRIPT="${SCRIPT_DIR}/remnawave-reverse-proxy-main/install_remnawave.sh"
+    if [ -n "$RR_SCRIPT" ]; then
+        echo "В этом репозитории есть скрипт remnawave-reverse-proxy (панель/нода/сертификаты)."
+        read -r -p "Запустить его сейчас? (y/N): " RUN_RR </dev/tty
+        if [ "${RUN_RR:-n}" = "y" ] || [ "${RUN_RR:-n}" = "Y" ]; then
+            exec bash "$RR_SCRIPT"
+        fi
+    fi
+    echo "Рекомендуется: bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)"
+    echo "  В меню выберите «Установка компонентов Remnawave» → «Установить только ноду»."
     read -r -p "Всё равно установить VPN Bot на этот сервер? (y/N): " INSTALL_BOT_ANYWAY </dev/tty
     if [ "${INSTALL_BOT_ANYWAY:-n}" != "y" ] && [ "${INSTALL_BOT_ANYWAY:-n}" != "Y" ]; then
         echo "Выход. Для ноды запустите скрипт по ссылке выше."
@@ -250,6 +261,26 @@ fi
 if [ -z "$SUB_DOMAIN" ] && [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
     read -r -p "Домен для Subscription Page (Enter — только по IP): " SUB_DOMAIN </dev/tty
 fi
+# Данные для «Добавить ноду в панель» (как в remnawave-reverse-proxy)
+if [ "$REMNAWAVE_ADD_NODE" = "true" ]; then
+    if [ ! -f "$REMNAWAVE_DIR/.env" ]; then
+        echo -e "${RED}Панель Remnawave не найдена ($REMNAWAVE_DIR/.env). Запускайте этот пункт на сервере с установленной панелью.${NC}"
+        exit 1
+    fi
+    PANEL_DOMAIN="${PANEL_DOMAIN:-$(grep -E '^FRONT_END_DOMAIN=' "$REMNAWAVE_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | head -1)}"
+    [ -z "$PANEL_DOMAIN" ] && read -r -p "Домен панели (как в панели): " PANEL_DOMAIN </dev/tty
+    [ -z "${REMNAWAVE_ADMIN_USER:-}" ] && read -r -p "Логин панели: " REMNAWAVE_ADMIN_USER </dev/tty
+    [ -z "${REMNAWAVE_ADMIN_PASS:-}" ] && read -r -s -p "Пароль панели: " REMNAWAVE_ADMIN_PASS </dev/tty
+    echo ""
+    while true; do
+        read -r -p "Имя ноды (латиница, цифры, дефис, 3–20 символов): " NODE_NAME </dev/tty
+        NODE_NAME="${NODE_NAME:-}"
+        if [[ "$NODE_NAME" =~ ^[a-zA-Z0-9-]+$ ]] && [ "${#NODE_NAME}" -ge 3 ] && [ "${#NODE_NAME}" -le 20 ]; then break; fi
+        echo -e "  ${YELLOW}Некорректное имя.${NC}"
+    done
+    read -r -p "SelfSteal домен для ноды (например node.example.com): " SELFSTEAL_DOMAIN </dev/tty
+    echo ""
+fi
 echo ""
 
 # 1. Обновление системы
@@ -275,6 +306,95 @@ apt-get install -y \
     python3-certbot-nginx \
     unzip \
     jq
+
+# «Добавить ноду в панель» — API как в remnawave-reverse-proxy (логин, конфиг-профиль, нода, host, squad)
+if [ "$REMNAWAVE_ADD_NODE" = "true" ]; then
+    echo "[2a/10] Добавление ноды в панель Remnawave..."
+    ADD_NODE_API="http://127.0.0.1:${REMNAWAVE_API_PROXY_PORT:-9080}"
+    ADD_NODE_HOST="${PANEL_DOMAIN:-localhost}"
+    if ! curl -s -f --max-time 5 -H "Host: $ADD_NODE_HOST" "$ADD_NODE_API/api/auth/status" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  API панели недоступен (127.0.0.1:9080). Убедитесь, что панель запущена и прокси настроен.${NC}"
+    else
+        login_resp=$(curl -s --connect-timeout 10 --max-time 20 -X POST "$ADD_NODE_API/api/auth/login" \
+            -H "Host: $ADD_NODE_HOST" -H "Content-Type: application/json" \
+            -d "{\"username\":\"$REMNAWAVE_ADMIN_USER\",\"password\":\"$REMNAWAVE_ADMIN_PASS\"}") || true
+        ADD_TOKEN=""
+        echo "$login_resp" | jq -e '.accessToken' >/dev/null 2>&1 && ADD_TOKEN=$(echo "$login_resp" | jq -r '.accessToken')
+        echo "$login_resp" | jq -e '.response.accessToken' >/dev/null 2>&1 && ADD_TOKEN=$(echo "$login_resp" | jq -r '.response.accessToken')
+        if [ -z "$ADD_TOKEN" ] || [ "$ADD_TOKEN" = "null" ]; then
+            echo -e "${RED}  Не удалось войти в панель. Проверьте логин и пароль.${NC}"
+        else
+            nodes_resp=$(curl -s --connect-timeout 5 --max-time 15 -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" "$ADD_NODE_API/api/nodes") || true
+            if echo "$nodes_resp" | jq -e --arg d "$SELFSTEAL_DOMAIN" '.response[]? | select(.address == $d)' >/dev/null 2>&1; then
+                echo -e "${YELLOW}  Домен ноды уже есть в панели: $SELFSTEAL_DOMAIN. Выберите другой домен.${NC}"
+            else
+                keys_resp=$(curl -s --connect-timeout 10 --max-time 20 -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" "$ADD_NODE_API/api/system/tools/x25519/generate") || true
+                PRIVATE_KEY=$(echo "$keys_resp" | jq -r '.response.keypairs[0].privateKey // empty')
+                if [ -z "$PRIVATE_KEY" ] || [ "$PRIVATE_KEY" = "null" ]; then
+                    echo -e "${RED}  Не удалось сгенерировать x25519 ключи.${NC}"
+                else
+                    SHORT_ID=$(openssl rand -hex 8)
+                    PROFILE_BODY=$(jq -n --arg name "$NODE_NAME" --arg domain "$SELFSTEAL_DOMAIN" --arg pk "$PRIVATE_KEY" --arg sid "$SHORT_ID" --arg tag "$NODE_NAME" '{
+                        name: $name,
+                        config: {
+                            log: { loglevel: "warning" },
+                            dns: { queryStrategy: "UseIPv4", servers: [{ address: "https://dns.google/dns-query", skipFallback: false }] },
+                            inbounds: [{
+                                tag: $tag,
+                                port: 443,
+                                protocol: "vless",
+                                settings: { clients: [], decryption: "none" },
+                                sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
+                                streamSettings: {
+                                    network: "tcp",
+                                    security: "reality",
+                                    realitySettings: {
+                                        show: false, xver: 1, dest: "/dev/shm/nginx.sock", spiderX: "", shortIds: [$sid],
+                                        privateKey: $pk, serverNames: [$domain]
+                                    }
+                                }
+                            }],
+                            outbounds: [{ tag: "DIRECT", protocol: "freedom" }, { tag: "BLOCK", protocol: "blackhole" }],
+                            routing: { rules: [
+                                { ip: ["geoip:private"], type: "field", outboundTag: "BLOCK" },
+                                { type: "field", protocol: ["bittorrent"], outboundTag: "BLOCK" }
+                            ]}
+                        }
+                    }')
+                    profile_resp=$(curl -s --connect-timeout 10 --max-time 25 -X POST -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" -H "Content-Type: application/json" "$ADD_NODE_API/api/config-profiles" -d "$PROFILE_BODY") || true
+                    config_uuid=$(echo "$profile_resp" | jq -r '.response.uuid // empty')
+                    inbound_uuid=$(echo "$profile_resp" | jq -r '.response.inbounds[0].uuid // empty')
+                    if [ -z "$config_uuid" ] || [ -z "$inbound_uuid" ]; then
+                        echo -e "${RED}  Не удалось создать конфиг-профиль. Имя «$NODE_NAME» может быть занято.${NC}"
+                    else
+                        node_payload=$(jq -n --arg name "$NODE_NAME" --arg addr "$SELFSTEAL_DOMAIN" --arg cu "$config_uuid" --arg iu "$inbound_uuid" '{
+                            name: $name, address: $addr, port: 2222,
+                            configProfile: { activeConfigProfileUuid: $cu, activeInbounds: [$iu] },
+                            isTrafficTrackingActive: false, trafficLimitBytes: 0, notifyPercent: 0, trafficResetDay: 31,
+                            excludedInbounds: [], countryCode: "XX", consumptionMultiplier: 1.0
+                        }')
+                        curl -s -X POST -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" -H "Content-Type: application/json" "$ADD_NODE_API/api/nodes" -d "$node_payload" >/dev/null || true
+                        host_payload=$(jq -n --arg cu "$config_uuid" --arg iu "$inbound_uuid" --arg remark "$NODE_NAME" --arg addr "$SELFSTEAL_DOMAIN" '{
+                            inbound: { configProfileUuid: $cu, configProfileInboundUuid: $iu },
+                            remark: $remark, address: $addr, port: 443, path: "", sni: $addr, host: "", alpn: null,
+                            fingerprint: "chrome", allowInsecure: false, isDisabled: false, securityLayer: "DEFAULT"
+                        }')
+                        curl -s -X POST -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" -H "Content-Type: application/json" "$ADD_NODE_API/api/hosts" -d "$host_payload" >/dev/null || true
+                        squads=$(curl -s --connect-timeout 5 --max-time 15 -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" "$ADD_NODE_API/api/internal-squads") || true
+                        squad_uuid=$(echo "$squads" | jq -r '.response.internalSquads[0].uuid // empty' 2>/dev/null)
+                        if [ -n "$squad_uuid" ]; then
+                            curl -s -X PATCH -H "Host: $ADD_NODE_HOST" -H "Authorization: Bearer $ADD_TOKEN" -H "Content-Type: application/json" "$ADD_NODE_API/api/internal-squads" -d "{\"uuid\":\"$squad_uuid\",\"inbounds\":[\"$inbound_uuid\"]}" >/dev/null || true
+                        fi
+                        echo -e "${GREEN}  Нода «$NODE_NAME» ($SELFSTEAL_DOMAIN) добавлена в панель.${NC}"
+                        echo "  Для установки ноды на другом сервере: remnawave-reverse-proxy → «Установить только ноду» (укажите IP панели и ключ из панели)."
+                    fi
+                fi
+            fi
+        fi
+    fi
+    REMNAWAVE_ADD_NODE=false
+    echo ""
+fi
 
 # Установка заглушки для SelfSteal (как в remnawave-reverse-proxy: simple/sni/nothing)
 install_selfsteal_template() {
@@ -346,14 +466,6 @@ install_selfsteal_template() {
 
 # 2b. Установка Remnawave Panel (официальный remnawave/backend + Subscription Page)
 if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
-    # Определить команду: docker compose (v2) или docker-compose (v1/standalone)
-    if docker compose version &>/dev/null; then
-        DOCKER_COMPOSE_CMD="docker compose"
-    elif command -v docker-compose &>/dev/null && docker-compose version &>/dev/null; then
-        DOCKER_COMPOSE_CMD="docker-compose"
-    else
-        DOCKER_COMPOSE_CMD="docker-compose"
-    fi
     echo "[2b/10] Установка Remnawave Panel..."
     if ! command -v docker &>/dev/null; then
         echo "  Установка Docker..."
@@ -365,6 +477,14 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
         apt-get install -y docker.io docker-compose-v2
         systemctl enable docker
         systemctl start docker
+    fi
+    # Определить команду после установки Docker: docker compose (v2) или docker-compose (v1)
+    if docker compose version &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker compose"
+    elif command -v docker-compose &>/dev/null && docker-compose version &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker-compose"
+    else
+        DOCKER_COMPOSE_CMD="docker compose"
     fi
     mkdir -p "$REMNAWAVE_DIR"
     cd "$REMNAWAVE_DIR"
