@@ -25,6 +25,45 @@ from remnawave_client import RemnawaveClient, RemnawaveError
 from utils import extract_short_uuid, get_subscription_url
 from yookassa_client import create_payment, init_yookassa
 
+from bot_messages import (
+    BACK_BUTTON,
+    BLOCKED,
+    BTN_INFO,
+    BTN_MY_SUBSCRIPTION,
+    BTN_REFERRAL,
+    BTN_TARIFFS,
+    CHOOSE_TARIFF,
+    INFO_NOT_CONFIGURED,
+    NO_SUBSCRIPTION,
+    PAY_BUTTON,
+    PAYMENT_CREATED,
+    PAYMENT_ERROR,
+    PLAN_NOT_FOUND,
+    REFERRAL_BONUS_EXTENDED,
+    REFERRAL_BONUS_PENDING,
+    REFERRAL_DISABLED,
+    REFERRAL_TEXT,
+    STATS_NO_ACCESS,
+    STATS_TEXT,
+    SUBSCRIBE_BUTTON,
+    SUBSCRIBE_CHECK_BUTTON,
+    SUBSCRIBE_TEXT,
+    SUBSCRIPTION_ACTIVE_NO_LINK,
+    SUBSCRIPTION_HEADER,
+    SUBSCRIPTION_LINK_ONLY,
+    SUBSCRIPTION_LOAD_ERROR,
+    SUBSCRIPTION_SHORT,
+    SUBSCRIPTION_WITH_PLAN,
+    SUPPORT_HEADING,
+    TRIAL_ACTIVATED,
+    TRIAL_ALREADY_USED,
+    TRIAL_BUTTON,
+    TRIAL_CREATED_FALLBACK,
+    TRIAL_DISABLED,
+    TRIAL_ERROR,
+    WELCOME_PREFIX,
+)
+
 # Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -68,7 +107,7 @@ class VPNBot:
     async def _check_blocked(self, update: Update, user_id: int) -> bool:
         """Проверить блокировку. Возвращает True если заблокирован."""
         if await self.db.is_blocked(user_id):
-            text = "⛔ Вы заблокированы. Обратитесь в поддержку."
+            text = BLOCKED
             if update.message:
                 await update.message.reply_text(text)
             elif update.callback_query:
@@ -89,13 +128,8 @@ class VPNBot:
             if member.status in ("left", "kicked"):
                 username = self.config.forced_channel_username or ""
                 link = f"https://t.me/{username.lstrip('@')}" if username else f"https://t.me/c/{str(channel_id).replace('-100', '')}"
-                text = (
-                    "📢 *Подпишитесь на канал*\n\n"
-                    "Для использования бота необходимо подписаться на наш канал.\n\n"
-                    f"[👉 Подписаться]({link})\n\n"
-                    "После подписки нажмите /start"
-                )
-                keyboard = [[InlineKeyboardButton("📢 Подписаться", url=link)], [InlineKeyboardButton("🔄 Проверить подписку", callback_data="check_sub")]]
+                text = SUBSCRIBE_TEXT.format(link=link)
+                keyboard = [[InlineKeyboardButton(SUBSCRIBE_BUTTON, url=link)], [InlineKeyboardButton(SUBSCRIBE_CHECK_BUTTON, callback_data="check_sub")]]
                 if update.message:
                     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
                 elif update.callback_query:
@@ -109,12 +143,12 @@ class VPNBot:
     def _get_main_reply_keyboard(self) -> ReplyKeyboardMarkup:
         """Постоянные кнопки главного меню (рядом с полем ввода)"""
         buttons = [
-            [KeyboardButton("🛒 Тарифы"), KeyboardButton("📋 Моя подписка")],
+            [KeyboardButton(BTN_TARIFFS), KeyboardButton(BTN_MY_SUBSCRIPTION)],
         ]
         if self.config.main_menu_info:
-            buttons.append([KeyboardButton("ℹ️ Информация")])
+            buttons.append([KeyboardButton(BTN_INFO)])
         if self.config.referral_days > 0:
-            buttons.append([KeyboardButton("👥 Реферальная программа")])
+            buttons.append([KeyboardButton(BTN_REFERRAL)])
         return ReplyKeyboardMarkup(
             buttons,
             resize_keyboard=True,
@@ -126,20 +160,20 @@ class VPNBot:
     ) -> tuple[str, list[list[InlineKeyboardButton]]]:
         """Собрать текст и клавиатуру главного меню"""
         vpn = self.config.vpn_name
-        text = f"👋 *Добро пожаловать в {vpn}!*\n\n"
+        text = WELCOME_PREFIX.format(vpn_name=vpn) + "\n\n"
         if self.config.welcome_message:
             welcome = self.config.welcome_message.replace("{name}", user_first_name)
             text += f"{welcome}\n\n"
         text += f"{self.config.keyboard_info}\n\n"
         if self.config.support_link:
-            text += "❓ *По тех вопросам — Поддержка*\n\n"
+            text += SUPPORT_HEADING + "\n\n"
         if full_welcome:
-            text += "*Тарифы:*\n"
+            text += TARIFFS_HEADING + "\n"
             for plan in self.config.plans:
                 text += f"• *{plan.name}* — {plan.price:.0f} ₽\n"
-            text += "\nВыберите тариф 👇"
+            text += "\n" + CHOOSE_TARIFF
         else:
-            text += "Выберите тариф 👇"
+            text += CHOOSE_TARIFF
         keyboard: list[list[InlineKeyboardButton]] = []
         if self.config.support_link:
             link = self.config.support_link
@@ -163,7 +197,7 @@ class VPNBot:
         if self.config.trial_days > 0:
             keyboard.append([
                 InlineKeyboardButton(
-                    f"🎁 Попробовать бесплатно ({self.config.trial_days} дн.)",
+                    TRIAL_BUTTON.format(days=self.config.trial_days),
                     callback_data="trial",
                 )
             ])
@@ -192,14 +226,12 @@ class VPNBot:
                     if extended and self.config.referral_days > 0:
                         await context.bot.send_message(
                             chat_id=referrer_id,
-                            text=f"🎉 По вашей ссылке перешёл новый пользователь! "
-                                 f"Вам добавлено +{self.config.referral_days} дней к подписке.",
+                            text=REFERRAL_BONUS_EXTENDED.format(days=self.config.referral_days),
                         )
                     else:
                         await context.bot.send_message(
                             chat_id=referrer_id,
-                            text="👋 По вашей ссылке перешёл новый пользователь! "
-                                 "Бонус будет начислен при наличии активной подписки.",
+                            text=REFERRAL_BONUS_PENDING,
                         )
                 except Exception as e:
                     logger.error(f"Ошибка реферального бонуса: {e}")
@@ -232,7 +264,7 @@ class VPNBot:
         plan_id = query.data.split(":")[1]
         plan = next((p for p in self.config.plans if p.id == plan_id), None)
         if not plan:
-            await query.edit_message_text("❌ Тариф не найден.")
+            await query.edit_message_text(PLAN_NOT_FOUND)
             return
         if not user:
             return
@@ -262,7 +294,7 @@ class VPNBot:
             confirmation_url = payment.get("confirmation_url")
             if not confirmation_url:
                 logger.error("Yookassa не вернула confirmation_url: %s", payment)
-                await query.edit_message_text("❌ Ошибка при создании платежа. Попробуйте позже.")
+                await query.edit_message_text(PAYMENT_ERROR)
                 return
 
             # Сохраняем заказ в БД
@@ -277,31 +309,19 @@ class VPNBot:
 
             # Отправляем ссылку на оплату
             keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "💳 Оплатить",
-                        url=confirmation_url,
-                    )
-                ],
-                [InlineKeyboardButton("◀️ Назад", callback_data="back")],
+                [InlineKeyboardButton(PAY_BUTTON, url=confirmation_url)],
+                [InlineKeyboardButton(BACK_BUTTON, callback_data="back")],
             ]
-
+            text = PAYMENT_CREATED.format(plan_name=plan.name, plan_price=plan.price)
             await query.edit_message_text(
-                f"""
-✅ *Платёж создан!*
-
-*Тариф:* {plan.name}
-*Сумма:* {plan.price:.0f} ₽
-
-Нажмите кнопку ниже для оплаты. После успешной оплаты подписка будет автоматически выдана в этот чат.
-""",
+                text,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
         except Exception as e:
             logger.exception("Ошибка создания платежа: %s", e)
-            await query.edit_message_text("❌ Ошибка при создании платежа. Попробуйте позже.")
+            await query.edit_message_text(PAYMENT_ERROR)
 
     async def my_subscription_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -324,10 +344,9 @@ class VPNBot:
                 active_orders = [o for o in orders if o.status == "succeeded" and o.short_uuid]
 
                 if not active_orders:
-                    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
+                    keyboard = [[InlineKeyboardButton(BACK_BUTTON, callback_data="back")]]
                     await query.edit_message_text(
-                        "📋 У вас пока нет активной подписки.\n\n"
-                        "Приобретите тариф, чтобы получить доступ к VPN.",
+                        NO_SUBSCRIPTION,
                         reply_markup=InlineKeyboardMarkup(keyboard),
                     )
                     return
@@ -338,17 +357,10 @@ class VPNBot:
                     order.short_uuid, self.config.remnawave.subscription_base_url
                 )
 
-                text = f"""
-📋 *Ваша подписка*
-
-*Тариф:* {order.plan_name}
-*Статус:* Активна ✅
-
-*Ссылка для подписки:*
-`{subscription_url}`
-
-Скопируйте ссылку и добавьте её в приложение VPN (Clash, V2Ray, Shadowrocket и др.)
-"""
+                text = SUBSCRIPTION_WITH_PLAN.format(
+                    plan_name=order.plan_name,
+                    subscription_url=subscription_url,
+                )
             else:
                 # Пользователь найден в Remnawave
                 rw_user = users[0] if isinstance(users, list) else users
@@ -357,18 +369,11 @@ class VPNBot:
                     subscription_url = get_subscription_url(
                         short_uuid, self.config.remnawave.subscription_base_url
                     )
-                    text = f"""
-📋 *Ваша подписка*
-
-*Ссылка для подписки:*
-`{subscription_url}`
-
-Скопируйте ссылку и добавьте её в приложение VPN.
-"""
+                    text = SUBSCRIPTION_LINK_ONLY.format(subscription_url=subscription_url)
                 else:
-                    text = "📋 Ваша подписка активна. Обратитесь в поддержку для получения ссылки."
+                    text = SUBSCRIPTION_ACTIVE_NO_LINK
 
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
+            keyboard = [[InlineKeyboardButton(BACK_BUTTON, callback_data="back")]]
             await query.edit_message_text(
                 text,
                 parse_mode="Markdown",
@@ -386,17 +391,17 @@ class VPNBot:
                     order.short_uuid, self.config.remnawave.subscription_base_url
                 )
                 await query.edit_message_text(
-                    f"📋 *Ваша подписка*\n\n`{sub_url}`",
+                    SUBSCRIPTION_SHORT.format(subscription_url=sub_url),
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                        [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                     ]),
                 )
             else:
                 await query.edit_message_text(
-                    "❌ Не удалось загрузить подписку. Попробуйте позже.",
+                    SUBSCRIPTION_LOAD_ERROR,
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                        [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                     ]),
                 )
 
@@ -414,9 +419,9 @@ class VPNBot:
 
         if self.config.trial_days <= 0:
             await query.edit_message_text(
-                "Пробный период отключен.",
+                TRIAL_DISABLED,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                 ]),
             )
             return
@@ -424,9 +429,9 @@ class VPNBot:
         used = await self.db.has_used_trial(user.id)
         if used:
             await query.edit_message_text(
-                "Вы уже использовали пробный период ранее.",
+                TRIAL_ALREADY_USED,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                 ]),
             )
             return
@@ -454,33 +459,27 @@ class VPNBot:
                     short_uuid, self.config.remnawave.subscription_base_url
                 )
                 traffic_str = f"{self.config.trial_data_limit_gb} ГБ" if self.config.trial_data_limit_gb else "безлимит"
-                text = f"""
-✅ *Пробный период активирован!*
-
-*Срок:* {self.config.trial_days} дней
-*Трафик:* {traffic_str}
-
-*Ссылка для подписки:*
-`{sub_url}`
-
-Скопируйте ссылку и добавьте в приложение VPN.
-"""
+                text = TRIAL_ACTIVATED.format(
+                    days=self.config.trial_days,
+                    traffic=traffic_str,
+                    subscription_url=sub_url,
+                )
             else:
-                text = "Пробный период создан. Проверьте панель Remnawave."
+                text = TRIAL_CREATED_FALLBACK
 
             await query.edit_message_text(
                 text,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                 ]),
             )
         except RemnawaveError as e:
             logger.exception("Ошибка создания trial: %s", e)
             await query.edit_message_text(
-                "❌ Не удалось активировать пробный период. Возможно, вы уже использовали его ранее.",
+                TRIAL_ERROR,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                 ]),
             )
 
@@ -498,9 +497,9 @@ class VPNBot:
 
         if self.config.referral_days <= 0:
             await query.edit_message_text(
-                "Реферальная программа отключена.",
+                REFERRAL_DISABLED,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
                 ]),
             )
             return
@@ -508,22 +507,15 @@ class VPNBot:
         bot_info = await context.bot.get_me()
         bot_username = bot_info.username
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
-
-        text = f"""
-👥 *Реферальная программа*
-
-Приглашайте друзей и получайте *+{self.config.referral_days} дней* к подписке за каждого, кто перейдёт по вашей ссылке!
-
-*Ваша реферальная ссылка:*
-`{ref_link}`
-
-Поделитесь ссылкой. Когда приглашённый друг перейдёт по ней — вам автоматически добавятся дни.
-"""
+        text = REFERRAL_TEXT.format(
+            referral_days=self.config.referral_days,
+            ref_link=ref_link,
+        )
         await query.edit_message_text(
             text,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Назад", callback_data="back")]
+                [InlineKeyboardButton(BACK_BUTTON, callback_data="back")]
             ]),
         )
 
@@ -562,7 +554,7 @@ class VPNBot:
             return
         if await self._check_subscription(update, user.id, context.bot):
             return
-        if text == "🛒 Тарифы":
+        if text == BTN_TARIFFS:
             welcome_text, keyboard = self._build_main_menu(
                 user.first_name or "User", full_welcome=False
             )
@@ -571,12 +563,11 @@ class VPNBot:
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
-        elif text == "📋 Моя подписка":
-            # Симулируем callback — создаём фейковый update с callback_query
+        elif text == BTN_MY_SUBSCRIPTION:
             await self._handle_my_subscription_via_message(update, context)
-        elif text == "ℹ️ Информация":
+        elif text == BTN_INFO:
             await self._handle_info_via_message(update, context)
-        elif text == "👥 Реферальная программа":
+        elif text == BTN_REFERRAL:
             await self._handle_referral_via_message(update, context)
 
     async def _handle_my_subscription_via_message(
@@ -593,8 +584,7 @@ class VPNBot:
                 active_orders = [o for o in orders if o.status == "succeeded" and o.short_uuid]
                 if not active_orders:
                     await update.message.reply_text(
-                        "📋 У вас пока нет активной подписки.\n\n"
-                        "Приобретите тариф, чтобы получить доступ к VPN.",
+                        NO_SUBSCRIPTION,
                         reply_markup=self._get_main_reply_keyboard(),
                     )
                     return
@@ -602,10 +592,9 @@ class VPNBot:
                 subscription_url = get_subscription_url(
                     order.short_uuid, self.config.remnawave.subscription_base_url
                 )
-                msg = (
-                    f"📋 *Ваша подписка*\n\n*Тариф:* {order.plan_name}\n"
-                    f"*Статус:* Активна ✅\n\n*Ссылка для подписки:*\n`{subscription_url}`\n\n"
-                    "Скопируйте ссылку и добавьте в приложение VPN."
+                msg = SUBSCRIPTION_WITH_PLAN.format(
+                    plan_name=order.plan_name,
+                    subscription_url=subscription_url,
                 )
             else:
                 rw_user = users[0] if isinstance(users, list) else users
@@ -614,12 +603,9 @@ class VPNBot:
                     subscription_url = get_subscription_url(
                         short_uuid, self.config.remnawave.subscription_base_url
                     )
-                    msg = (
-                        f"📋 *Ваша подписка*\n\n*Ссылка для подписки:*\n`{subscription_url}`\n\n"
-                        "Скопируйте ссылку и добавьте в приложение VPN."
-                    )
+                    msg = SUBSCRIPTION_LINK_ONLY.format(subscription_url=subscription_url)
                 else:
-                    msg = "📋 Ваша подписка активна. Обратитесь в поддержку."
+                    msg = SUBSCRIPTION_ACTIVE_NO_LINK
             await update.message.reply_text(
                 msg,
                 parse_mode="Markdown",
@@ -634,13 +620,13 @@ class VPNBot:
                     active[0].short_uuid, self.config.remnawave.subscription_base_url
                 )
                 await update.message.reply_text(
-                    f"📋 *Ваша подписка*\n\n`{sub_url}`",
+                    SUBSCRIPTION_SHORT.format(subscription_url=sub_url),
                     parse_mode="Markdown",
                     reply_markup=self._get_main_reply_keyboard(),
                 )
             else:
                 await update.message.reply_text(
-                    "❌ Не удалось загрузить подписку. Попробуйте позже.",
+                    SUBSCRIPTION_LOAD_ERROR,
                     reply_markup=self._get_main_reply_keyboard(),
                 )
 
@@ -650,7 +636,7 @@ class VPNBot:
         """Показать информацию (кнопка «ℹ️ Информация»)"""
         if not self.config.main_menu_info:
             await update.message.reply_text(
-                "Информация не настроена.",
+                INFO_NOT_CONFIGURED,
                 reply_markup=self._get_main_reply_keyboard(),
             )
             return
@@ -668,18 +654,15 @@ class VPNBot:
             return
         if self.config.referral_days <= 0:
             await update.message.reply_text(
-                "Реферальная программа отключена.",
+                REFERRAL_DISABLED,
                 reply_markup=self._get_main_reply_keyboard(),
             )
             return
         bot_info = await context.bot.get_me()
         ref_link = f"https://t.me/{bot_info.username}?start=ref_{user.id}"
-        text = (
-            "👥 *Реферальная программа*\n\n"
-            f"Приглашайте друзей и получайте *+{self.config.referral_days} дней* к подписке "
-            "за каждого, кто перейдёт по вашей ссылке!\n\n"
-            f"*Ваша реферальная ссылка:*\n`{ref_link}`\n\n"
-            "Поделитесь ссылкой. Когда приглашённый друг перейдёт по ней — вам автоматически добавятся дни."
+        text = REFERRAL_TEXT.format(
+            referral_days=self.config.referral_days,
+            ref_link=ref_link,
         )
         await update.message.reply_text(
             text,
@@ -714,20 +697,17 @@ class VPNBot:
         """Команда /stats для администраторов"""
         user = update.effective_user
         if not user or user.id not in self.config.admin_ids:
-            await update.message.reply_text("⛔ У вас нет доступа к этой команде.")
+            await update.message.reply_text(STATS_NO_ACCESS)
             return
 
         stats = await self.db.get_stats()
-        text = f"""
-📊 *Статистика бота*
-
-✅ Оплаченных заказов: {stats['orders_succeeded']}
-⏳ Ожидают оплаты: {stats['orders_pending']}
-💰 Выручка: {stats['revenue']:.0f} ₽
-
-🎁 Trial пользователей: {stats['trial_users']}
-👥 Рефералов: {stats['referrals']}
-"""
+        text = STATS_TEXT.format(
+            orders_succeeded=stats["orders_succeeded"],
+            orders_pending=stats["orders_pending"],
+            revenue=stats["revenue"],
+            trial_users=stats["trial_users"],
+            referrals=stats["referrals"],
+        )
         await update.message.reply_text(text, parse_mode="Markdown")
 
     def build_application(self) -> Application:
@@ -744,7 +724,7 @@ class VPNBot:
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.check_sub_callback, pattern="^check_sub$"))
         app.add_handler(CallbackQueryHandler(self.back_callback, pattern="^back$"))
-        patterns = r"^(🛒 Тарифы|📋 Моя подписка|ℹ️ Информация|👥 Реферальная программа)$"
+        patterns = rf"^({BTN_TARIFFS}|{BTN_MY_SUBSCRIPTION}|{BTN_INFO}|{BTN_REFERRAL})$"
         app.add_handler(
             MessageHandler(filters.Regex(patterns), self.main_menu_message),
         )
