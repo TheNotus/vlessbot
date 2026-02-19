@@ -382,7 +382,7 @@ ngrok http 8000
 
 ```bash
 source venv/bin/activate
-MODE=webhook python main.py
+python main.py
 ```
 
 Бот и webhook-сервер работают на порту 8000.
@@ -400,7 +400,6 @@ After=network.target
 Type=simple
 User=your_user
 WorkingDirectory=/home/your_user/vpn-bot
-Environment="MODE=webhook"
 ExecStart=/home/your_user/vpn-bot/venv/bin/python main.py
 Restart=always
 RestartSec=10

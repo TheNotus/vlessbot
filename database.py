@@ -78,6 +78,12 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_seen (
+                    telegram_id INTEGER PRIMARY KEY,
+                    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             try:
                 await db.execute("ALTER TABLE orders ADD COLUMN referrer_id INTEGER")
             except Exception:
@@ -128,7 +134,7 @@ class Database:
         """Обновить заказ при успешной оплате"""
         async with self._lock:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
+                cursor = await db.execute(
                     """
                     UPDATE orders SET status = 'succeeded', completed_at = ?,
                     username = ?, short_uuid = ? WHERE payment_id = ?
@@ -136,7 +142,7 @@ class Database:
                     (datetime.utcnow().isoformat(), username, short_uuid, payment_id),
                 )
                 await db.commit()
-                return db.total_changes > 0
+                return cursor.rowcount > 0
 
     async def update_order_status(self, payment_id: str, status: str) -> bool:
         """Обновить статус заказа"""
@@ -145,7 +151,7 @@ class Database:
                 completed_at = (
                     datetime.utcnow().isoformat() if status == "succeeded" else None
                 )
-                await db.execute(
+                cursor = await db.execute(
                     """
                     UPDATE orders SET status = ?, completed_at = ?
                     WHERE payment_id = ?
@@ -153,7 +159,7 @@ class Database:
                     (status, completed_at, payment_id),
                 )
                 await db.commit()
-                return db.total_changes > 0
+                return cursor.rowcount > 0
 
     async def get_user_orders(self, telegram_id: int) -> list[Order]:
         """Получить заказы пользователя"""
@@ -188,6 +194,23 @@ class Database:
                     return True
                 except Exception:
                     return False
+
+    async def is_first_visit(self, telegram_id: int) -> bool:
+        """Вернуть True, если это первый /start пользователя (записываем визит). Иначе False."""
+        async with self._lock:
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute(
+                    "SELECT 1 FROM user_seen WHERE telegram_id = ?",
+                    (telegram_id,),
+                ) as cur:
+                    if await cur.fetchone():
+                        return False
+                await db.execute(
+                    "INSERT INTO user_seen (telegram_id) VALUES (?)",
+                    (telegram_id,),
+                )
+                await db.commit()
+                return True
 
     async def user_is_new(self, telegram_id: int) -> bool:
         """Проверить, был ли пользователь раньше в базе (заказы или trial)"""
@@ -256,6 +279,15 @@ class Database:
                 row = await cur.fetchone()
                 stats["orders_pending"] = int(row["cnt"]) if row else 0
             return stats
+
+    async def get_broadcast_recipients(self) -> list[int]:
+        """Список telegram_id всех, кто хотя бы раз заходил в бота (для рассылки)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT telegram_id FROM user_seen ORDER BY telegram_id"
+            ) as cur:
+                rows = await cur.fetchall()
+                return [r[0] for r in rows] if rows else []
 
     async def get_stats_chart_data(self, days: int = 14) -> dict:
         """Данные для графика: покупки и выручка по дням за последние N дней"""

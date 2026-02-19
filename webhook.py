@@ -158,6 +158,17 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
             except Exception as e:
                 logger.error(f"Ошибка отправки в Telegram: {e}")
 
+        # Уведомление админам о покупке
+        if telegram_bot and config.admin_ids:
+            user_display_name = await _get_user_display_name(telegram_bot, telegram_id)
+            await _notify_admins_purchase(
+                payment_id=payment_id,
+                plan_name=plan.name,
+                amount=plan.price,
+                telegram_id=telegram_id,
+                user_display_name=user_display_name,
+            )
+
     except RemnawaveError as e:
         error_id = f"ERR-{uuid.uuid4().hex[:8].upper()}"
         logger.error(
@@ -178,6 +189,52 @@ async def process_successful_payment(payment_id: str, metadata: dict) -> None:
         if not order_again or order_again.status != "succeeded":
             await db.update_order_status(payment_id, "failed")
             await _notify_payment_failure(telegram_id, plan.name, str(e), error_id)
+
+
+async def _get_user_display_name(bot: Bot, telegram_id: int) -> str:
+    """Получить отображаемое имя пользователя (имя, @username) по telegram_id."""
+    try:
+        chat = await bot.get_chat(telegram_id)
+        parts = []
+        if getattr(chat, "first_name", None):
+            parts.append(chat.first_name)
+        if getattr(chat, "last_name", None):
+            parts.append(chat.last_name)
+        name = " ".join(parts).strip() if parts else "—"
+        if getattr(chat, "username", None) and chat.username:
+            name += f" (@{chat.username})"
+        return name or "—"
+    except Exception:
+        return "—"
+
+
+async def _notify_admins_purchase(
+    payment_id: str,
+    plan_name: str,
+    amount: float,
+    telegram_id: int,
+    user_display_name: str,
+) -> None:
+    """Отправить админам уведомление о новой покупке."""
+    if not telegram_bot or not config or not config.admin_ids:
+        return
+    text = (
+        "🛒 *Новая покупка*\n\n"
+        f"*ID платежа:* `{payment_id}`\n"
+        f"*Тариф:* {plan_name}\n"
+        f"*Сумма:* {amount:.0f} ₽\n\n"
+        f"*Пользователь:* {user_display_name}\n"
+        f"*Telegram ID:* `{telegram_id}`"
+    )
+    for admin_id in config.admin_ids:
+        try:
+            await telegram_bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отправить админу {admin_id} уведомление о покупке: {e}")
 
 
 async def _notify_payment_failure(

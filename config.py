@@ -59,8 +59,8 @@ class Config:
     # Ссылка на поддержку (пусто — блок скрыт)
     support_link: str = ""
     support_button_text: str = "НАПИСАТЬ"
-    # Приветствие при /start. {name} подставляется (опционально)
-    welcome_message: str = ""
+    # Ссылка для сотрудничества (показывается в разделе «Контакты»)
+    cooperation_link: str = ""
     # Информация — кнопка «ℹ️ Информация»
     main_menu_info: str = ""
     expired_cleanup_days: int = 7  # 0 = отключено
@@ -153,7 +153,7 @@ class Config:
             keyboard_info=(os.getenv("KEYBOARD_INFO") or "Ниже доступны кнопки для выбора тарифа, подписки и других действий.").replace("\\n", "\n"),
             support_link=(os.getenv("SUPPORT_LINK") or "").strip(),
             support_button_text=os.getenv("SUPPORT_BUTTON_TEXT", "НАПИСАТЬ"),
-            welcome_message=(os.getenv("WELCOME_MESSAGE") or "").replace("\\n", "\n"),
+            cooperation_link=(os.getenv("COOPERATION_LINK") or "").strip(),
             main_menu_info=(os.getenv("MAIN_MENU_INFO") or "").replace("\\n", "\n"),
             expired_cleanup_days=cls._int_env("EXPIRED_CLEANUP_DAYS", 7),
             forced_channel_enabled=os.getenv("FORCED_CHANNEL_ENABLED", "false").lower() in ("1", "true", "yes"),

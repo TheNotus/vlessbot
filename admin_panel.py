@@ -73,6 +73,11 @@ def load_env_vars() -> list[tuple[str, str, bool]]:
     return vars_list
 
 
+def _escape_env_value(value: str) -> str:
+    """Экранировать значение для .env (кавычки и обратные слэши)"""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def save_env_var(key: str, value: str) -> bool:
     """Сохранить переменную в .env"""
     base = Path(os.getcwd())
@@ -84,13 +89,17 @@ def save_env_var(key: str, value: str) -> bool:
     content = env_path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
     found = False
+    # Значения с пробелами, кавычками или пустые — в кавычках
+    need_quotes = " " in value or '"' in value or "\\" in value or not value
+    safe_val = _escape_env_value(value) if need_quotes else value
+    new_line = f'{key}="{safe_val}"' if need_quotes else f"{key}={value}"
     for i, line in enumerate(lines):
         if line.strip().startswith(key + "="):
-            lines[i] = f'{key}="{value}"' if " " in value or not value else f"{key}={value}"
+            lines[i] = new_line
             found = True
             break
     if not found:
-        lines.append(f'{key}="{value}"' if " " in value or not value else f"{key}={value}")
+        lines.append(new_line)
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
 
@@ -318,10 +327,10 @@ async def settings_page(request: Request, _: str = Depends(verify_admin)):
         input_type = "password" if mask and val else "text"
         placeholder = "••••••" if mask and val else "(не задано)"
         input_val = val if not (mask and val) else ""
-        if key in ("MAIN_MENU_INFO", "WELCOME_MESSAGE"):
-            # Текстовые области (поддерживают \n)
+        if key == "MAIN_MENU_INFO":
+            # Текстовая область (поддерживает \n)
             input_val = val.replace("\\n", "\n") if val else ""
-            ph = "Текст приветствия. {name} — имя" if key == "WELCOME_MESSAGE" else "Кнопка «ℹ️ Информация». Enter для новой строки"
+            ph = "Кнопка «ℹ️ Информация». Enter для новой строки"
             rows.append(f'''
     <div class="setting-row" style="align-items:flex-start">
       <span class="setting-key" style="min-width:140px"><code>{html.escape(key)}</code></span>
@@ -435,7 +444,7 @@ async def settings_save_all(
             skipped += 1
             continue
         # Для многострочных сохраняем переносы как \n в .env
-        if key in ("MAIN_MENU_INFO", "WELCOME_MESSAGE"):
+        if key == "MAIN_MENU_INFO":
             val = val.replace("\r\n", "\n").replace("\n", "\\n")
         save_env_var(key, val)
         saved += 1

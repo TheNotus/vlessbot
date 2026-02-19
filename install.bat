@@ -15,6 +15,13 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>nul
+if %errorlevel% neq 0 (
+    echo Ошибка: Требуется Python 3.10 или выше. Текущая версия:
+    python --version 2>nul
+    pause
+    exit /b 1
+)
 
 echo Установка зависимостей...
 python -m pip install --upgrade pip -q

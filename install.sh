@@ -18,6 +18,17 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Безопасный read: при curl | bash /dev/tty может отсутствовать
+read_prompt() {
+  local silent=""
+  [ "$1" = "-s" ] && { silent="-s"; shift; }
+  if [ -c /dev/tty ] 2>/dev/null; then
+    read -r $silent -p "$1" "$2" </dev/tty
+  else
+    read -r $silent -p "$1" "$2" 2>/dev/null || eval "$2=\"\""
+  fi
+}
+
 REPO_URL="${VPN_BOT_REPO:-https://github.com/TheNotus/vlessbot.git}"
 REPO_BRANCH="${VPN_BOT_BRANCH:-main}"
 # Remnawave: выбор пользователя (1–4) или переменные REMNAWAVE_PANEL_INSTALL=true|false, REMNAWAVE_NODE_INSTALL=true|false
@@ -197,7 +208,7 @@ if [ -z "$REMNAWAVE_PANEL_INSTALL" ] && [ -z "$REMNAWAVE_ADD_NODE" ]; then
     echo "  3) Только панель Remnawave"
     echo "  4) Добавить ноду в панель (запускать на сервере с уже установленной панелью)"
     echo "  5) Только нода Remnawave (на другом сервере; рекомендуется скрипт remnawave-reverse-proxy)"
-    read -r -p "Выбор (1–5) [1]: " REMNAWAVE_CHOICE </dev/tty
+    read_prompt "Выбор (1–5) [1]: " REMNAWAVE_CHOICE
     REMNAWAVE_CHOICE="${REMNAWAVE_CHOICE:-1}"
     case "$REMNAWAVE_CHOICE" in
         2) REMNAWAVE_PANEL_INSTALL=true; REMNAWAVE_NODE_INSTALL=true; REMNAWAVE_ADD_NODE=false ;;
@@ -216,14 +227,14 @@ if [ "$REMNAWAVE_NODE_INSTALL" = "true" ] && [ "$REMNAWAVE_PANEL_INSTALL" != "tr
     [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/remnawave-reverse-proxy-main/install_remnawave.sh" ] && RR_SCRIPT="${SCRIPT_DIR}/remnawave-reverse-proxy-main/install_remnawave.sh"
     if [ -n "$RR_SCRIPT" ]; then
         echo "В этом репозитории есть скрипт remnawave-reverse-proxy (панель/нода/сертификаты)."
-        read -r -p "Запустить его сейчас? (y/N): " RUN_RR </dev/tty
+        read_prompt "Запустить его сейчас? (y/N): " RUN_RR
         if [ "${RUN_RR:-n}" = "y" ] || [ "${RUN_RR:-n}" = "Y" ]; then
             exec bash "$RR_SCRIPT"
         fi
     fi
     echo "Рекомендуется: bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)"
     echo "  В меню выберите «Установка компонентов Remnawave» → «Установить только ноду»."
-    read -r -p "Всё равно установить VPN Bot на этот сервер? (y/N): " INSTALL_BOT_ANYWAY </dev/tty
+    read_prompt "Всё равно установить VPN Bot на этот сервер? (y/N): " INSTALL_BOT_ANYWAY
     if [ "${INSTALL_BOT_ANYWAY:-n}" != "y" ] && [ "${INSTALL_BOT_ANYWAY:-n}" != "Y" ]; then
         echo "Выход. Для ноды запустите скрипт по ссылке выше."
         exit 0
@@ -236,7 +247,7 @@ if [ "$REMNAWAVE_PANEL_INSTALL" = "true" ] && [ "$REMNAWAVE_NODE_INSTALL" = "tru
     if [ -z "$SELFSTEAL_DOMAIN" ]; then
         echo -e "${CYAN}Домен для SelfSteal (нода, маскировка):${NC}"
         echo "  Например node.example.com — на этот домен будет отдаваться заглушка сайта."
-        read -r -p "SelfSteal домен (Enter — пропустить): " SELFSTEAL_DOMAIN </dev/tty
+        read_prompt "SelfSteal домен (Enter — пропустить): " SELFSTEAL_DOMAIN
     fi
     echo ""
 fi
@@ -246,20 +257,20 @@ fi
 if [ -z "$WEBHOOK_DOMAIN" ] || [ "$WEBHOOK_DOMAIN" = "bot.example.com" ]; then
     echo -e "${CYAN}Введите домен для webhook бота (например bot.example.com):${NC}"
     echo -e "  DNS должен указывать на IP этого сервера."
-    read -r -p "Домен: " WEBHOOK_DOMAIN </dev/tty
+    read_prompt "Домен: " WEBHOOK_DOMAIN
     WEBHOOK_DOMAIN="${WEBHOOK_DOMAIN:-bot.example.com}"
     if [ "$WEBHOOK_DOMAIN" = "bot.example.com" ]; then
         echo -e "  ${YELLOW}Используется bot.example.com — замените вручную в nginx и .env${NC}"
     fi
 fi
 if [ -z "$CERTBOT_EMAIL" ]; then
-    read -r -p "Email для SSL (Let's Encrypt) или Enter чтобы пропустить: " CERTBOT_EMAIL </dev/tty
+    read_prompt "Email для SSL (Let's Encrypt) или Enter чтобы пропустить: " CERTBOT_EMAIL
 fi
 if [ -z "$PANEL_DOMAIN" ] && [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
-    read -r -p "Домен для Remnawave Panel (Enter — только по IP): " PANEL_DOMAIN </dev/tty
+    read_prompt "Домен для Remnawave Panel (Enter — только по IP): " PANEL_DOMAIN
 fi
 if [ -z "$SUB_DOMAIN" ] && [ "$REMNAWAVE_PANEL_INSTALL" = "true" ]; then
-    read -r -p "Домен для Subscription Page (Enter — только по IP): " SUB_DOMAIN </dev/tty
+    read_prompt "Домен для Subscription Page (Enter — только по IP): " SUB_DOMAIN
 fi
 # Данные для «Добавить ноду в панель» (как в remnawave-reverse-proxy)
 if [ "$REMNAWAVE_ADD_NODE" = "true" ]; then
@@ -268,17 +279,17 @@ if [ "$REMNAWAVE_ADD_NODE" = "true" ]; then
         exit 1
     fi
     PANEL_DOMAIN="${PANEL_DOMAIN:-$(grep -E '^FRONT_END_DOMAIN=' "$REMNAWAVE_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | head -1)}"
-    [ -z "$PANEL_DOMAIN" ] && read -r -p "Домен панели (как в панели): " PANEL_DOMAIN </dev/tty
-    [ -z "${REMNAWAVE_ADMIN_USER:-}" ] && read -r -p "Логин панели: " REMNAWAVE_ADMIN_USER </dev/tty
-    [ -z "${REMNAWAVE_ADMIN_PASS:-}" ] && read -r -s -p "Пароль панели: " REMNAWAVE_ADMIN_PASS </dev/tty
+    [ -z "$PANEL_DOMAIN" ] && read_prompt "Домен панели (как в панели): " PANEL_DOMAIN
+    [ -z "${REMNAWAVE_ADMIN_USER:-}" ] && read_prompt "Логин панели: " REMNAWAVE_ADMIN_USER
+    [ -z "${REMNAWAVE_ADMIN_PASS:-}" ] && read_prompt -s "Пароль панели: " REMNAWAVE_ADMIN_PASS
     echo ""
     while true; do
-        read -r -p "Имя ноды (латиница, цифры, дефис, 3–20 символов): " NODE_NAME </dev/tty
+        read_prompt "Имя ноды (латиница, цифры, дефис, 3–20 символов): " NODE_NAME
         NODE_NAME="${NODE_NAME:-}"
         if [[ "$NODE_NAME" =~ ^[a-zA-Z0-9-]+$ ]] && [ "${#NODE_NAME}" -ge 3 ] && [ "${#NODE_NAME}" -le 20 ]; then break; fi
         echo -e "  ${YELLOW}Некорректное имя.${NC}"
     done
-    read -r -p "SelfSteal домен для ноды (например node.example.com): " SELFSTEAL_DOMAIN </dev/tty
+    read_prompt "SelfSteal домен для ноды (например node.example.com): " SELFSTEAL_DOMAIN
     echo ""
 fi
 echo ""
@@ -406,7 +417,7 @@ install_selfsteal_template() {
     echo "  2) SNI templates (distillium)"
     echo "  3) Nothing Sni templates (prettyleaf)"
     echo "  0) Пропустить (минимальная страница)"
-    read -r -p "Выбор (0–3) [1]: " TPL_CHOICE </dev/tty
+    read_prompt "Выбор (0–3) [1]: " TPL_CHOICE
     TPL_CHOICE="${TPL_CHOICE:-1}"
     case "$TPL_CHOICE" in
         0) echo "<!DOCTYPE html><html><head><meta charset=utf-8><title>Site</title></head><body><p>Welcome.</p></body></html>" > /var/www/html/index.html; echo "  Установлена минимальная страница."; return 0 ;;
@@ -1173,6 +1184,17 @@ EOF
 echo "  Запуск сервиса..."
 systemctl start $SERVICE_NAME || true
 
+# Команда vlessbot — управление через консоль (меню: перезагрузка, логи, удаление бота)
+if [ -d "$(dirname "$INSTALL_DIR")" ] && [ -f "$INSTALL_DIR/cli.py" ]; then
+    cat > /usr/local/bin/vlessbot << VLBEOF
+#!/bin/sh
+INSTALL_DIR='$INSTALL_DIR'
+exec "\$INSTALL_DIR/venv/bin/python" "\$INSTALL_DIR/cli.py" "\$@"
+VLBEOF
+    chmod 755 /usr/local/bin/vlessbot 2>/dev/null || true
+    echo "  Команда управления: ${CYAN}vlessbot${NC} (меню по цифрам)"
+fi
+
 echo ""
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      🎉 Установка успешно завершена! 🎉      ${NC}"
@@ -1266,4 +1288,5 @@ if [ -n "$GENERATED_ADMIN_PASSWORD" ]; then
 fi
 echo ""
 echo -e "Логи бота: ${CYAN}sudo journalctl -u $SERVICE_NAME -f${NC}"
+echo -e "Управление (меню): ${CYAN}vlessbot${NC} (перезапуск, логи, удаление бота)"
 echo ""
